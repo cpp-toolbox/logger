@@ -136,4 +136,32 @@ class ConsoleLogger : public ILogger {
     }
 };
 
+#include <chrono>
+
+class RateLimitedConsoleLogger : public ConsoleLogger {
+  public:
+    using clock = std::chrono::steady_clock;
+    using time_point = clock::time_point;
+    using duration = std::chrono::duration<double>;
+
+    explicit RateLimitedConsoleLogger(double max_frequency_hz)
+        : min_interval(1.0 / max_frequency_hz), last_tick_time(clock::now()) {}
+
+    void tick() {
+        time_point now = clock::now();
+        duration elapsed = now - last_tick_time;
+
+        if (elapsed >= min_interval) {
+            enable_all_levels();
+            last_tick_time = now;
+        } else {
+            disable_all_levels();
+        }
+    }
+
+  private:
+    duration min_interval;
+    time_point last_tick_time;
+};
+
 #endif
