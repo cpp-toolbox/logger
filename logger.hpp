@@ -108,6 +108,8 @@ class ILogger {
 // -------------------- ConsoleLogger Implementation --------------------
 class ConsoleLogger : public ILogger {
   public:
+    explicit ConsoleLogger(std::string_view logger_name = "") { set_name(std::string(logger_name)); }
+
     void log(LogLevel level, std::string_view message) override {
         if (!name.empty()) {
             std::cout << "[" << name << "] ";
