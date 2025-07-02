@@ -114,26 +114,29 @@ class ConsoleLogger : public ILogger {
         if (!name.empty()) {
             std::cout << "[" << name << "] ";
         }
-        std::cout << "[" << level_to_string(level) << "] " << message << std::endl;
+
+        const auto [color_code, level_str] = level_to_colored_string(level);
+        std::cout << color_code << "[" << level_str << "]" << "\033[0m "; // Reset color after log level
+        std::cout << message << std::endl;
     }
 
   private:
-    const char *level_to_string(LogLevel level) {
+    std::pair<const char *, const char *> level_to_colored_string(LogLevel level) {
         switch (level) {
         case LogLevel::Trace:
-            return "Trace";
+            return {"\033[90m", "trace"}; // Gray
         case LogLevel::Debug:
-            return "Debug";
+            return {"\033[36m", "debug"}; // Cyan
         case LogLevel::Info:
-            return "Info";
+            return {"\033[32m", "info"}; // Green
         case LogLevel::Warn:
-            return "Warn";
+            return {"\033[33m", "warn"}; // Yellow
         case LogLevel::Error:
-            return "Error";
+            return {"\033[31m", "error"}; // Red
         case LogLevel::Critical:
-            return "Critical";
+            return {"\033[1;31m", "critical"}; // Bright Red (Bold)
         default:
-            return "Unknown";
+            return {"\033[0m", "Unknown"}; // Default
         }
     }
 };
