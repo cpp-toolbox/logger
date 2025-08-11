@@ -105,10 +105,11 @@ class ILogger {
     std::string name;                                                           // Optional logger name
 };
 
-// -------------------- ConsoleLogger Implementation --------------------
 class ConsoleLogger : public ILogger {
   public:
-    explicit ConsoleLogger(std::string_view logger_name = "") { set_name(std::string(logger_name)); }
+    explicit ConsoleLogger(std::string_view logger_name = "") : section_depth_(0) {
+        set_name(std::string(logger_name));
+    }
 
     void log(LogLevel level, std::string_view message) override {
         if (!name.empty()) {
@@ -116,11 +117,30 @@ class ConsoleLogger : public ILogger {
         }
 
         const auto [color_code, level_str] = level_to_colored_string(level);
-        std::cout << color_code << "[" << level_str << "]" << "\033[0m "; // Reset color after log level
+        std::cout << color_code << "[" << level_str << "]" << "\033[0m ";
+
+        for (int i = 0; i < section_depth_; ++i) {
+            std::cout << "| ";
+        }
+
         std::cout << message << std::endl;
     }
 
+    void start_section(std::string_view section_name = "") {
+        debug("=== start {} ===", section_name);
+        ++section_depth_;
+    }
+
+    void end_section(std::string_view section_name = "") {
+        if (section_depth_ > 0) {
+            --section_depth_;
+        }
+        debug("=== end {} ===", section_name);
+    }
+
   private:
+    int section_depth_;
+
     std::pair<const char *, const char *> level_to_colored_string(LogLevel level) {
         switch (level) {
         case LogLevel::Trace:
