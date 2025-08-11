@@ -126,16 +126,16 @@ class ConsoleLogger : public ILogger {
         std::cout << message << std::endl;
     }
 
-    void start_section(std::string_view section_name = "") {
-        debug("=== start {} ===", section_name);
+    template <typename... Args> void start_section(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        debug("=== start {} ===", fmt::format(fmt_str, std::forward<Args>(args)...));
         ++section_depth_;
     }
 
-    void end_section(std::string_view section_name = "") {
+    template <typename... Args> void end_section(fmt::format_string<Args...> fmt_str, Args &&...args) {
         if (section_depth_ > 0) {
             --section_depth_;
         }
-        debug("=== end {} ===", section_name);
+        debug("=== end {} ===", fmt::format(fmt_str, std::forward<Args>(args)...));
     }
 
   private:
