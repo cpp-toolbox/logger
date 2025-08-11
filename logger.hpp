@@ -161,6 +161,24 @@ class ConsoleLogger : public ILogger {
     }
 };
 
+class LogSection {
+  public:
+    template <typename... Args>
+    LogSection(ConsoleLogger &logger, fmt::format_string<Args...> fmt_str, Args &&...args)
+        : logger_(logger), section_name_(fmt::format(fmt_str, std::forward<Args>(args)...)) {
+        logger_.start_section("{}", section_name_);
+    }
+
+    ~LogSection() { logger_.end_section("{}", section_name_); }
+
+    LogSection(const LogSection &) = delete;
+    LogSection &operator=(const LogSection &) = delete;
+
+  private:
+    ConsoleLogger &logger_;
+    std::string section_name_; // store formatted name here
+};
+
 #include <chrono>
 
 class RateLimitedConsoleLogger : public ConsoleLogger {
