@@ -127,7 +127,7 @@ class ConsoleLogger : public ILogger {
     }
 
     template <typename... Args> void start_section(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        debug("=== start {} ===", fmt::format(fmt_str, std::forward<Args>(args)...));
+        debug("=== start {} === {{", fmt::format(fmt_str, std::forward<Args>(args)...));
         ++section_depth_;
     }
 
@@ -135,7 +135,7 @@ class ConsoleLogger : public ILogger {
         if (section_depth_ > 0) {
             --section_depth_;
         }
-        debug("=== end {} ===", fmt::format(fmt_str, std::forward<Args>(args)...));
+        debug("===   end {} === }}", fmt::format(fmt_str, std::forward<Args>(args)...));
     }
 
   private:
