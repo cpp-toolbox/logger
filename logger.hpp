@@ -1,170 +1,151 @@
 #ifndef LOGGER_HPP
 #define LOGGER_HPP
-/*
-    LogLevel Usage in Game Engine Context:
-
-    LogLevel::Trace
-    - Extremely detailed, fine-grained logs.
-    - Used for tracing code execution paths, function entry/exit, memory ops,
-   ECS steps, etc.
-    - Typically disabled in production due to volume/performance cost.
-
-    LogLevel::Debug
-    - General-purpose debugging information.
-    - Used to track game state, system behavior, asset loading, AI decisions,
-   input handling, etc.
-    - Useful during active development; not enabled in production builds.
-
-    LogLevel::Info
-    - High-level runtime information indicating normal operation.
-    - Examples: level loaded, player joined, shaders compiled, assets
-   hot-reloaded.
-    - Suitable for both development and production for visibility into system
-   flow.
-
-    LogLevel::Warn
-    - Indicates a potential issue or unexpected condition that is non-fatal.
-    - Examples: missing optional assets, deprecated API use, high frame times,
-   fallback behavior.
-    - Deserves attention, useful for QA, testing, and sometimes user-visible
-   logs.
-
-    LogLevel::Error
-    - A serious issue that impacted functionality but did not crash the engine.
-    - Examples: asset load failures, script exceptions, physics errors, network
-   disconnects.
-    - Should be logged prominently and often triggers error-handling logic.
-
-    LogLevel::Critical
-    - Fatal errors that prevent continued execution or indicate
-   corruption/system failure.
-    - Examples: GPU device failure, save data corruption, out-of-memory, engine
-   init failure.
-    - Typically results in shutdown, crash, or forced failover.
-*/
 
 #include <fmt/core.h>
+
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/stdout_sinks.h>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/rotating_file_sink.h>
+
+#include <map>
 #include <string_view>
-#include <iostream>
-#include <bitset>
 
-// -------------------- LogLevel Definition --------------------
-enum class LogLevel { Trace = 0, Debug, Info, Warn, Error, Critical, Count };
+const std::map<spdlog::level::level_enum, std::string> level_to_string = {
+    {spdlog::level::trace, "trace"}, {spdlog::level::debug, "debug"}, {spdlog::level::info, "info"},
+    {spdlog::level::warn, "warn"},   {spdlog::level::err, "err"},     {spdlog::level::critical, "critical"},
+    {spdlog::level::off, "off"}};
 
-class ILogger {
+// NOTE: this is replacing everything else.
+class Logger {
   public:
-    virtual ~ILogger() = default;
-
-    virtual void log(LogLevel level, std::string_view message) = 0;
-
-    void enable_level(LogLevel level) { enabled_levels.set(static_cast<size_t>(level), true); }
-
-    void disable_level(LogLevel level) { enabled_levels.set(static_cast<size_t>(level), false); }
-
-    void enable_all_levels() { enabled_levels.set(); }
-
-    void disable_all_levels() { enabled_levels.reset(); }
-
-    bool is_level_enabled(LogLevel level) const { return enabled_levels.test(static_cast<size_t>(level)); }
-
-    void set_name(std::string logger_name) { name = std::move(logger_name); }
-    const std::string &get_name() const { return name; }
-
-    template <typename... Args> void trace(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        if (is_level_enabled(LogLevel::Trace))
-            log(LogLevel::Trace, fmt::format(fmt_str, std::forward<Args>(args)...));
+    explicit Logger(std::string_view logger_name = "section_logger")
+        : section_depth_(0), current_level_(spdlog::level::debug), current_pattern_("[%H:%M:%S.%f] [%^%l%$] %v") {
+        auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+        logger_ = std::make_shared<spdlog::logger>(std::string(logger_name), stdout_sink);
+        spdlog::register_logger(logger_);
+        configure(current_level_, current_pattern_);
     }
 
-    template <typename... Args> void debug(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        if (is_level_enabled(LogLevel::Debug))
-            log(LogLevel::Debug, fmt::format(fmt_str, std::forward<Args>(args)...));
+    void add_sink(std::shared_ptr<spdlog::sinks::sink> sink) {
+        logger_->sinks().push_back(sink);
+        reapply_formatting(); // <-- ensure new sink matches
     }
 
-    template <typename... Args> void info(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        if (is_level_enabled(LogLevel::Info))
-            log(LogLevel::Info, fmt::format(fmt_str, std::forward<Args>(args)...));
+    void add_file_sink(const std::string &file_path, bool truncate = false) {
+        auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(file_path, truncate);
+        add_sink(file_sink);
     }
 
-    template <typename... Args> void warn(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        if (is_level_enabled(LogLevel::Warn))
-            log(LogLevel::Warn, fmt::format(fmt_str, std::forward<Args>(args)...));
+    void add_rotating_file_sink(const std::string &file_path, size_t max_size, size_t max_files) {
+        auto rotating_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(file_path, max_size, max_files);
+        add_sink(rotating_sink);
     }
 
-    template <typename... Args> void error(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        if (is_level_enabled(LogLevel::Error))
-            log(LogLevel::Error, fmt::format(fmt_str, std::forward<Args>(args)...));
+    void add_stdout_sink(bool color = true) {
+        if (color) {
+            add_sink(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+        } else {
+            add_sink(std::make_shared<spdlog::sinks::stdout_sink_mt>());
+        }
     }
 
-    template <typename... Args> void critical(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        if (is_level_enabled(LogLevel::Critical))
-            log(LogLevel::Critical, fmt::format(fmt_str, std::forward<Args>(args)...));
+    void configure(spdlog::level::level_enum lvl, std::string_view pattern) {
+        current_level_ = lvl;
+        current_pattern_ = std::string(pattern);
+        reapply_formatting();
     }
 
-  protected:
-    std::bitset<static_cast<size_t>(LogLevel::Count)> enabled_levels{0b111111}; // All enabled by default
-    std::string name;                                                           // Optional logger name
-};
+    template <typename... Args>
+    void log(spdlog::level::level_enum lvl, fmt::format_string<Args...> fmt_str, Args &&...args) {
+        auto msg = fmt::format(fmt_str, std::forward<Args>(args)...);
 
-class ConsoleLogger : public ILogger {
-  public:
-    explicit ConsoleLogger(std::string_view logger_name = "") : section_depth_(0) {
-        set_name(std::string(logger_name));
-    }
-
-    void log(LogLevel level, std::string_view message) override {
-        if (!name.empty()) {
-            std::cout << "[" << name << "] ";
+        // Compute the maximum length of all level names
+        static size_t max_level_len = 0;
+        if (max_level_len == 0) {
+            for (const auto &p : level_to_string) {
+                if (p.second.size() > max_level_len) {
+                    max_level_len = p.second.size();
+                }
+            }
         }
 
-        const auto [color_code, level_str] = level_to_colored_string(level);
-        std::cout << color_code << "[" << level_str << "]" << "\033[0m ";
-
+        // Prepend section bars
+        std::string prefix;
         for (int i = 0; i < section_depth_; ++i) {
-            std::cout << "| ";
+            prefix += "| ";
         }
 
-        std::cout << message << std::endl;
+        // Pad spaces after level name
+        const std::string &level_str = level_to_string.at(lvl);
+        size_t padding = max_level_len - level_str.size();
+
+        // Combine everything
+        msg = std::string(padding, ' ') + prefix + msg;
+
+        logger_->log(lvl, msg);
+    }
+
+    // Convenience wrappers
+    template <typename... Args> void trace(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::trace, fmt_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args> void debug(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::debug, fmt_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args> void info(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::info, fmt_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args> void warn(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::warn, fmt_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args> void error(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::err, fmt_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args> void critical(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::critical, fmt_str, std::forward<Args>(args)...);
     }
 
     template <typename... Args> void start_section(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        debug("=== start {} ===", fmt::format(fmt_str, std::forward<Args>(args)...));
+        start_section(spdlog::level::info, fmt_str, std::forward<Args>(args)...);
+    }
+
+    template <typename... Args>
+    void start_section(spdlog::level::level_enum lvl, fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(lvl, "=== start {} === {{", fmt::format(fmt_str, std::forward<Args>(args)...));
         ++section_depth_;
     }
 
     template <typename... Args> void end_section(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        if (section_depth_ > 0) {
+        end_section(spdlog::level::info, fmt_str, std::forward<Args>(args)...);
+    }
+
+    template <typename... Args>
+    void end_section(spdlog::level::level_enum lvl, fmt::format_string<Args...> fmt_str, Args &&...args) {
+        if (section_depth_ > 0)
             --section_depth_;
-        }
-        debug("=== end {} ===", fmt::format(fmt_str, std::forward<Args>(args)...));
+        log(lvl, "===   end {} === }}", fmt::format(fmt_str, std::forward<Args>(args)...));
     }
 
   private:
-    int section_depth_;
-
-    std::pair<const char *, const char *> level_to_colored_string(LogLevel level) {
-        switch (level) {
-        case LogLevel::Trace:
-            return {"\033[90m", "trace"}; // Gray
-        case LogLevel::Debug:
-            return {"\033[36m", "debug"}; // Cyan
-        case LogLevel::Info:
-            return {"\033[32m", "info"}; // Green
-        case LogLevel::Warn:
-            return {"\033[33m", "warn"}; // Yellow
-        case LogLevel::Error:
-            return {"\033[31m", "error"}; // Red
-        case LogLevel::Critical:
-            return {"\033[1;31m", "critical"}; // Bright Red (Bold)
-        default:
-            return {"\033[0m", "Unknown"}; // Default
+    void reapply_formatting() {
+        logger_->set_level(current_level_);
+        for (auto &sink : logger_->sinks()) {
+            sink->set_pattern(current_pattern_);
         }
     }
+
+    int section_depth_;
+    std::shared_ptr<spdlog::logger> logger_;
+    spdlog::level::level_enum current_level_;
+    std::string current_pattern_;
 };
 
 class LogSection {
   public:
     template <typename... Args>
-    LogSection(ConsoleLogger &logger, fmt::format_string<Args...> fmt_str, Args &&...args)
+    LogSection(Logger &logger, fmt::format_string<Args...> fmt_str, Args &&...args)
         : logger_(logger), section_name_(fmt::format(fmt_str, std::forward<Args>(args)...)) {
         logger_.start_section("{}", section_name_);
     }
@@ -175,36 +156,8 @@ class LogSection {
     LogSection &operator=(const LogSection &) = delete;
 
   private:
-    ConsoleLogger &logger_;
+    Logger &logger_;
     std::string section_name_; // store formatted name here
-};
-
-#include <chrono>
-
-class RateLimitedConsoleLogger : public ConsoleLogger {
-  public:
-    using clock = std::chrono::steady_clock;
-    using time_point = clock::time_point;
-    using duration = std::chrono::duration<double>;
-
-    explicit RateLimitedConsoleLogger(double max_frequency_hz)
-        : min_interval(1.0 / max_frequency_hz), last_tick_time(clock::now()) {}
-
-    void tick() {
-        time_point now = clock::now();
-        duration elapsed = now - last_tick_time;
-
-        if (elapsed >= min_interval) {
-            enable_all_levels();
-            last_tick_time = now;
-        } else {
-            disable_all_levels();
-        }
-    }
-
-  private:
-    duration min_interval;
-    time_point last_tick_time;
 };
 
 #endif
