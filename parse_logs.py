@@ -1,0 +1,356 @@
+import re
+from datetime import datetime, timedelta
+from typing import List, Union, Tuple
+
+class Event:
+    def __init__(self, timestamp: datetime, level: str, message: str):
+        self.timestamp = timestamp
+        self.level = level
+        self.message = message
+    
+    def __repr__(self):
+        return f"Event({self.timestamp.time()}, {self.level}, {self.message})"
+
+class Section:
+    def __init__(self, name: str, start_time: datetime):
+        self.name = name
+        self.start_time = start_time
+        self.end_time = None
+        self.children: List[Union["Section", Event]] = []
+    
+    def close(self, end_time: datetime):
+        self.end_time = end_time
+    
+    def duration(self):
+        if self.start_time and self.end_time:
+            return (self.end_time - self.start_time).total_seconds() * 1e6  # µs
+        return None
+    
+    def __repr__(self, indent=0):
+        ind = "  " * indent
+        dur = f" ({self.duration():.0f}µs)" if self.duration() else ""
+        s = f"{ind}Section({self.name}, {self.start_time.time()} -> {self.end_time.time() if self.end_time else '...'}{dur}):\n"
+        for child in self.children:
+            s += child.__repr__(indent + 1) if isinstance(child, Section) else f"{ind}  {child}\n"
+        return s
+
+def parse_log(filename: str) -> Section:
+    timestamp_re = re.compile(r"\[(.*?)\] \[(.*?)\]\s+(.*)")
+    start_re = re.compile(r"^===\s*start\s+(.+?)\s*===\s*\{")
+    end_re   = re.compile(r"^===\s+end\s+(.+?)\s*===\s*\}")
+    
+    root = Section("root", None)
+    stack: List[Section] = [root]
+    
+    first_timestamp = None
+    last_timestamp = None
+    
+    with open(filename, "r") as f:
+        for line_num, line in enumerate(f, 1):
+            match = timestamp_re.match(line.strip())
+            if not match:
+                continue
+            
+            ts_str, level, msg = match.groups()
+            timestamp = datetime.strptime(ts_str, "%H:%M:%S.%f")
+            
+            if first_timestamp is None:
+                first_timestamp = timestamp
+                root.start_time = timestamp
+            last_timestamp = timestamp
+
+            # remove the prefixed "| " bars
+            msg_clean = re.sub(r"^(?:\|\s*)+", "", msg)
+
+            # check section start
+            start_match = start_re.match(msg_clean)
+            if start_match:
+                section_name = start_match.group(1)
+                section = Section(section_name, timestamp)
+                stack[-1].children.append(section)
+                stack.append(section)
+                continue
+            
+            # check section end
+            end_match = end_re.match(msg_clean)
+            if end_match:
+                section_name = end_match.group(1)
+                if stack and stack[-1].name == section_name:
+                    stack[-1].close(timestamp)
+                    stack.pop()
+                else:
+                    print(f"Warning: unmatched end marker for {section_name}")
+                continue
+            
+            # normal event
+            event = Event(timestamp, level, msg_clean)
+            stack[-1].children.append(event)
+    
+    if last_timestamp:
+        root.close(last_timestamp)
+    
+    return root
+
+from datetime import datetime, timedelta
+from typing import List, Tuple
+import colorsys
+
+
+class TimelineVisualizer:
+    def __init__(self, root_section: "Section"):
+        self.root_section = root_section
+        self.commands: List[str] = []
+        self.used_text_areas: List[Tuple[float, float, float, float]] = []
+
+        self.start_time: datetime = root_section.start_time
+        self.end_time: datetime = root_section.end_time
+        self.total_duration: float = (
+            (self.end_time - self.start_time).total_seconds() * 1e6
+        )  # microseconds
+
+    # -------------------------------------------------
+    # Geometry + layout helpers
+    # -------------------------------------------------
+
+
+    def time_to_x(self, timestamp: datetime) -> float:
+        elapsed_seconds = (timestamp - self.start_time).total_seconds()
+        return elapsed_seconds
+
+    # def time_to_x(self, timestamp: datetime) -> float:
+    #     elapsed_microseconds = (timestamp - self.start_time).total_seconds() * 1e6
+    #     return -1.0 + 2.0 * (elapsed_microseconds / self.total_duration)
+
+    def generate_color(self, depth: int, index: int = 0) -> tuple:
+        hue = (depth * 0.3 + index * 0.1) % 1.0
+        saturation = 0.7
+        value = 0.9 - (depth * 0.1) % 0.6
+        return colorsys.hsv_to_rgb(hue, saturation, value)
+
+    # -------------------------------------------------
+    # Drawing methods
+    # -------------------------------------------------
+    def draw_base_timeline(self):
+        self.commands.append("generate_rectangle(-0.0, -0.9, 0.0, 2.0, 0.02) | (0.5, 0.5, 0.5)")
+
+    def draw_ticks(self):
+        for i in range(11):
+            x_pos = -1.0 + (i * 0.2)
+            time_fraction = i / 10.0
+            tick_time_us = time_fraction * self.total_duration
+            tick_timestamp = self.start_time + timedelta(microseconds=tick_time_us)
+
+            self.commands.append(
+                f"generate_rectangle({x_pos:.3f}, -0.9, 0.0, 0.01, 0.1) | (0.4, 0.4, 0.4)"
+            )
+            time_str = tick_timestamp.strftime("%H:%M:%S.%f")
+            text_x, text_y = x_pos - 0.05, -1.15
+            self.used_text_areas.append((text_x, text_x + 0.1, text_y, text_y + 0.08))
+            self.commands.append(
+                f'get_text_geometry("{time_str}", Rectangle(({text_x:.3f}, {text_y:.3f}, 0.1), 0.1, 0.08)) | (0.8, 0.8, 0.8)'
+            )
+
+    def get_depth_scale(self, depth: int) -> float: 
+        return (1/(depth + 1))
+
+    def get_event_width(self, root_section_width: float,  depth: int) -> float:
+        return 0.005 * self.get_depth_scale(depth + 1) * (root_section_width / 2)
+
+
+    def get_section_rect_height(self, root_section_width: float, depth: int) -> float:
+        return  0.15 * self.get_depth_scale(depth) * (root_section_width / 2)
+
+    def draw_section_rect(self, section: Section, depth: int, section_index: int, bottom_y_section: float,  root_section_width: float) -> tuple[float, float, float]:
+        x_start = self.time_to_x(section.start_time)
+        x_end = self.time_to_x(section.end_time)
+        # NOTE: at the base level width = 2
+        width = x_end - x_start
+
+        height = self.get_section_rect_height(root_section_width, depth) 
+
+
+        rect_center_y = bottom_y_section + height / 2
+        rect_center_x = (x_start+x_end) / 2
+
+        color = self.generate_color(depth, section_index)
+
+        # Section rectangle
+        self.commands.append(
+            f"generate_rectangle({rect_center_x:.6f}, {rect_center_y:.6f}, 0.0, {width:.6f}, {height:.6f}) "
+            f"| ({color[0]:.3f}, {color[1]:.3f}, {color[2]:.3f})"
+        )
+
+        def format_duration_us(duration_us: float) -> str:
+            units = [
+                ("µs", 1),
+                ("ms", 1_000),
+                ("s", 1_000_000),
+                ("min", 60 * 1_000_000),
+                ("h", 3600 * 1_000_000),
+            ]
+
+            # Find the largest unit that keeps the value >= 1
+            for unit, factor in reversed(units):
+                if duration_us >= factor:
+                    value = duration_us / factor
+                    # 3 decimal places for small values, 0 if it's big
+                    if value < 10:
+                        return f"{value:.3f}{unit}"
+                    elif value < 100:
+                        return f"{value:.2f}{unit}"
+                    else:
+                        return f"{value:.0f}{unit}"
+            return f"{duration_us:.0f}µs"  # fallback
+
+        # Section text label with duration
+        duration = section.duration()
+        duration_text = f" ({format_duration_us(duration)})" if duration is not None else ""
+        label_text = (section.name if hasattr(section, "name") else f"Section {section_index}") + duration_text
+
+        self.commands.append(
+            f'get_text_geometry("{label_text}", Rectangle(({rect_center_x:.6f}, {rect_center_y:.6f}, 0.01), '
+            f'{width:.6f}, {height:.6f})) | (0.9, 0.9, 0.9)'
+        )
+
+        return width, height, rect_center_y
+
+    def group_event_sequences(self, section: "Section"):
+        children_sorted = sorted(
+            section.children,
+            key=lambda c: c.timestamp if isinstance(c, Event) else c.start_time,
+        )
+        event_sequences: List[List["Event"]] = []
+        current_seq: List["Event"] = []
+
+        for child in children_sorted:
+            if isinstance(child, Event):
+                current_seq.append(child)
+            else:
+                if current_seq:
+                    event_sequences.append(current_seq)
+                    current_seq = []
+        if current_seq:
+            event_sequences.append(current_seq)
+        return event_sequences
+
+    def draw_event_sequence_annotations(self, event_sequence: List[Event], parent_section: Section, depth: int, parent_section_rect_center_y: float, parent_section_rect_width: float, parent_section_rect_height: float, root_section_width):
+        first_event, last_event = event_sequence[0], event_sequence[-1]
+
+        # Bounds limited by surrounding subsections
+        sections_ending_before_first_event = [s for s in parent_section.children if isinstance(s, Section) and s.end_time <= first_event.timestamp]
+        left_bound_time = max([s.end_time for s in sections_ending_before_first_event], default=parent_section.start_time)
+
+        sections_starting_after_last_event = [s for s in parent_section.children if isinstance(s, Section) and s.start_time >= last_event.timestamp]
+        right_bound_time = min([s.start_time for s in sections_starting_after_last_event], default=parent_section.end_time)
+
+        # Rectangle for sequence
+        availble_area_x_start = self.time_to_x(left_bound_time)
+        available_area_x_end = self.time_to_x(right_bound_time)
+        available_width = available_area_x_end - availble_area_x_start
+
+        parent_section_top_y = parent_section_rect_center_y + parent_section_rect_height/2 
+        annotation_rect_center_y = parent_section_top_y + self.get_section_rect_height(root_section_width, depth) * 1.5
+        annotation_rect_height = 0.08 * self.get_depth_scale(depth) * (root_section_width / 2)
+
+        num_events_in_sequence = len(event_sequence)
+
+        # we're doing margin like THINGY|MARGIN, THINGY|MARGIN
+        margin = 0.01 * available_width
+        remaining_space = (available_width - margin * (num_events_in_sequence - 1))
+        event_annotation_rect_width =  remaining_space / num_events_in_sequence
+
+        for i, event in enumerate(event_sequence):
+            start_x = availble_area_x_start + i * (event_annotation_rect_width + margin)
+            annotation_rect_center_x =  start_x + event_annotation_rect_width / 2
+
+            annotation_color = (0.4, 0.6, 0.8)
+            self.commands.append(
+                f"generate_rectangle({annotation_rect_center_x:.6f}, {annotation_rect_center_y:.6f}, 0.0, {event_annotation_rect_width:.6f}, {annotation_rect_height:.6f}) "
+                f"| ({annotation_color[0]:.3f}, {annotation_color[1]:.3f}, {annotation_color[2]:.3f})"
+            )
+
+            # Label text
+            label_text = event.message.strip()
+            self.commands.append(
+                f'get_text_geometry("{label_text}", Rectangle(({annotation_rect_center_x:.6f}, {annotation_rect_center_y:.6f}, 0.01), '
+                f'{event_annotation_rect_width:.6f}, {annotation_rect_height:.6f})) | (1.0, 1.0, 0.8)'
+            )
+
+            # Connector line
+            event_x = self.time_to_x(event.timestamp)
+            event_y = parent_section_top_y + self.get_section_rect_height(root_section_width, depth)
+            text_point_x = annotation_rect_center_x
+            text_point_y = annotation_rect_center_y 
+            connector_color = (0.6, 0.6, 0.6)
+
+            self.commands.append(
+                f"generate_rectangle_between_2d(({text_point_x:.6f}, {text_point_y:.6f}), "
+                    f"({event_x:.6f}, {event_y:.6f}), {0.002 * (root_section_width / 2) * self.get_depth_scale(depth):.6f}) | {connector_color}"
+            )
+
+    def process_section(self, section: "Section", depth: int, bottom_y_current_section: float, section_index_for_labelling: int = 0, root_section_width : float = -1):
+        if section.end_time is None:
+            return bottom_y_current_section
+
+        if root_section_width == -1: 
+            x_start = self.time_to_x(section.start_time)
+            x_end = self.time_to_x(section.end_time)
+            # NOTE: at the base level width = 2
+            root_section_width = x_end - x_start
+
+
+        section_rect_width, section_rect_height, section_rect_center_y = self.draw_section_rect(section, depth, section_index_for_labelling, bottom_y_current_section, root_section_width)
+
+
+
+        # Event annotations
+        for seq in self.group_event_sequences(section):
+            self.draw_event_sequence_annotations(seq, section, depth, section_rect_center_y, section_rect_width, section_rect_height, root_section_width)
+
+        # iterate and recurse
+        bottom_y_of_next_section = bottom_y_current_section + section_rect_height  # directly stack, no spacing
+        child_section_index = 0
+
+        for child in section.children:
+            if isinstance(child, Section):
+                self.process_section(child, depth + 1, bottom_y_of_next_section, child_section_index, root_section_width)
+                child_section_index += 1
+            elif isinstance(child, Event):
+                event_center_x = self.time_to_x(child.timestamp)
+                event_color = (1.0, 0.8, 0.4)
+                event_height = self.get_section_rect_height(root_section_width, depth + 1)
+                event_width = self.get_event_width(root_section_width, depth + 1)
+                top_y_current_section = bottom_y_current_section + section_rect_height 
+                event_center_y = top_y_current_section + event_height / 2
+                self.commands.append(
+                    f"generate_rectangle({event_center_x:.6f}, {event_center_y:.6f}, 0.0, {event_width:.6f}, {event_height:.6f}) "
+                    f"| ({event_color[0]:.3f}, {event_color[1]:.3f}, {event_color[2]:.3f})"
+                )
+
+
+    # -------------------------------------------------
+    # Public interface
+    # -------------------------------------------------
+    def generate(self) -> List[str]:
+        self.commands.clear()
+        self.used_text_areas.clear()
+
+        self.draw_base_timeline()
+        self.draw_ticks()
+        self.process_section(self.root_section, 0, -0.7, 0)
+        return self.commands
+
+    def save(self, filename: str = "timeline_visualization.txt") -> List[str]:
+        commands = self.generate()
+        with open(filename, "w") as f:
+            for cmd in commands:
+                f.write(cmd + "\n")
+        return commands
+
+
+# Example usage
+if __name__ == "__main__":
+    root = parse_log("logs.txt")
+    visualizer = TimelineVisualizer(root)
+    commands = visualizer.save("invocations.txt")
+    print(f"Generated {len(commands)} commands")
