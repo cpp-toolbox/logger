@@ -20,13 +20,24 @@ const std::map<spdlog::level::level_enum, std::string> level_to_string = {
 // NOTE: this is replacing everything else.
 class Logger {
   public:
-    explicit Logger(std::string_view logger_name = "section_logger")
+    explicit Logger(std::string_view base_name = "section_logger")
         : section_depth_(0), current_level_(spdlog::level::debug), current_pattern_("[%H:%M:%S.%f] [%^%l%$] %v") {
+        std::string logger_name = std::string(base_name);
+
+        // If logger exists, increment postfix until unique
+        int counter = 1;
+        while (spdlog::get(logger_name) != nullptr) {
+            logger_name = std::string(base_name) + "_" + std::to_string(counter++);
+        }
+
         auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-        logger_ = std::make_shared<spdlog::logger>(std::string(logger_name), stdout_sink);
+        logger_ = std::make_shared<spdlog::logger>(logger_name, stdout_sink);
         spdlog::register_logger(logger_);
+
         configure(current_level_, current_pattern_);
     }
+
+    void remove_all_sinks() { logger_->sinks().clear(); }
 
     void add_sink(std::shared_ptr<spdlog::sinks::sink> sink) {
         logger_->sinks().push_back(sink);
@@ -128,6 +139,11 @@ class Logger {
         log(lvl, "===   end {} === }}", fmt::format(fmt_str, std::forward<Args>(args)...));
     }
 
+    void disable_all_levels() {
+        current_level_ = spdlog::level::off;
+        logger_->set_level(current_level_);
+    }
+
   private:
     void reapply_formatting() {
         logger_->set_level(current_level_);
@@ -159,5 +175,7 @@ class LogSection {
     Logger &logger_;
     std::string section_name_; // store formatted name here
 };
+
+extern Logger global_logger;
 
 #endif
