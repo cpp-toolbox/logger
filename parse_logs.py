@@ -156,7 +156,7 @@ class TimelineVisualizer:
             text_x, text_y = x_pos - 0.05, -1.15
             self.used_text_areas.append((text_x, text_x + 0.1, text_y, text_y + 0.08))
             self.commands.append(
-                f'get_text_geometry("{time_str}", Rectangle(({text_x:.3f}, {text_y:.3f}, 0.1), 0.1, 0.08)) | (0.8, 0.8, 0.8)'
+                f'get_text_geometry("{time_str}", Rectangle(({text_x:.3f}, {text_y:.3f}, 0.1), 0.2, 0.16)) | (0.8, 0.8, 0.8)'
             )
 
     def get_depth_scale(self, depth: int) -> float:
