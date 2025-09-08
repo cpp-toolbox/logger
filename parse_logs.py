@@ -102,13 +102,37 @@ def parse_log(filename: str) -> Section:
 from datetime import datetime, timedelta
 from typing import List, Tuple
 import colorsys
+import json
+
+from enum import Enum
 
 
 class TimelineVisualizer:
-    def __init__(self, root_section: "Section"):
+    def __init__(
+        self,
+        root_section: Section,
+        build_direction: str = "down",
+        ndc_units_per_second: float = 0.5,
+        use_custom_root_section_height: bool = True,
+        custom_root_section_height: float = 0.01,
+        base_timeline_position_y: float = 0,
+        timeline_tick_width: float = 0.01,
+        timeline_tick_height: float = 0.1,
+    ):
         self.root_section = root_section
         self.commands: List[str] = []
+        # NOTE: possibly unused?
         self.used_text_areas: List[Tuple[float, float, float, float]] = []
+
+        # Configurable parameters
+
+        self.build_direction_factor = -1 if build_direction == "down" else 1
+        self.ndc_units_per_second = ndc_units_per_second
+        self.use_custom_root_section_height = use_custom_root_section_height
+        self.custom_root_section_height = custom_root_section_height
+        self.base_timeline_position_y = base_timeline_position_y
+        self.timeline_tick_width = timeline_tick_width
+        self.timeline_tick_height = timeline_tick_height
 
         self.start_time: datetime = root_section.start_time
         self.end_time: datetime = root_section.end_time
@@ -116,13 +140,28 @@ class TimelineVisualizer:
             self.end_time - self.start_time
         ).total_seconds() * 1e6  # microseconds
 
+    @classmethod
+    def from_config(cls, root_section: "Section", config_path: str):
+        """Factory method to create a TimelineVisualizer from a JSON config file."""
+        with open(config_path, "r") as f:
+            config = json.load(f)
+
+        # only keep keys that match the constructor arguments
+        valid_keys = {
+            k: v for k, v in config.items() if k in cls.__init__.__code__.co_varnames
+        }
+
+        return cls(root_section, **valid_keys)
+
     # -------------------------------------------------
     # Geometry + layout helpers
     # -------------------------------------------------
 
+    # NOTE: this is what determines the scale to a certain extent
     def time_to_x(self, timestamp: datetime) -> float:
         elapsed_seconds = (timestamp - self.start_time).total_seconds()
-        return elapsed_seconds
+        ndc_x_pos = elapsed_seconds * self.ndc_units_per_second
+        return ndc_x_pos
 
     # def time_to_x(self, timestamp: datetime) -> float:
     #     elapsed_microseconds = (timestamp - self.start_time).total_seconds() * 1e6
@@ -139,7 +178,7 @@ class TimelineVisualizer:
     # -------------------------------------------------
     def draw_base_timeline(self):
         self.commands.append(
-            "generate_rectangle(-0.0, -0.9, 0.0, 2.0, 0.02) | (0.5, 0.5, 0.5)"
+            f"generate_rectangle(-0.0, {self.base_timeline_position_y}, 0.0, 2.0, 0.02) | (0.5, 0.5, 0.5)"
         )
 
     def draw_ticks(self):
@@ -150,10 +189,10 @@ class TimelineVisualizer:
             tick_timestamp = self.start_time + timedelta(microseconds=tick_time_us)
 
             self.commands.append(
-                f"generate_rectangle({x_pos:.3f}, -0.9, 0.0, 0.01, 0.1) | (0.4, 0.4, 0.4)"
+                f"generate_rectangle({x_pos:.3f}, {self.base_timeline_position_y}, 0.0, {self.timeline_tick_width}, {self.timeline_tick_height}) | (0.4, 0.4, 0.4)"
             )
             time_str = tick_timestamp.strftime("%H:%M:%S.%f")
-            text_x, text_y = x_pos - 0.05, -1.15
+            text_x, text_y = x_pos - 0.05, self.base_timeline_position_y - 0.1
             self.used_text_areas.append((text_x, text_x + 0.1, text_y, text_y + 0.08))
             self.commands.append(
                 f'get_text_geometry("{time_str}", Rectangle(({text_x:.3f}, {text_y:.3f}, 0.1), 0.2, 0.16)) | (0.8, 0.8, 0.8)'
@@ -200,7 +239,11 @@ class TimelineVisualizer:
         else:
             height = self.get_section_rect_height_aspect_ratio_based(width)
 
-        rect_center_y = bottom_y_section + height / 2
+        if section.name == "root":
+            if self.use_custom_root_section_height:
+                height = self.custom_root_section_height
+
+        rect_center_y = bottom_y_section + (height / 2) * self.build_direction_factor
         rect_center_x = (x_start + x_end) / 2
 
         color = self.generate_color(depth, section_index)
@@ -316,27 +359,34 @@ class TimelineVisualizer:
         remaining_space = available_width - margin * (num_events_in_sequence - 1)
         annotation_rect_width = remaining_space / num_events_in_sequence
 
-        parent_section_top_y = (
-            parent_section_rect_center_y + parent_section_rect_height / 2
+        parent_section_build_side_y = (
+            parent_section_rect_center_y
+            + (parent_section_rect_height / 2) * self.build_direction_factor
         )
         annotation_rect_center_y: float
         annotation_rect_height: float
         if height_is_depth_based:
             annotation_rect_center_y = (
-                parent_section_top_y
-                + self.get_section_rect_height_depth_based(root_section_width, depth)
-                * 1.5
+                parent_section_build_side_y
+                + (
+                    self.get_section_rect_height_depth_based(root_section_width, depth)
+                    * 1.5
+                )
+                * self.build_direction_factor
             )
             annotation_rect_height = (
                 0.08 * self.get_depth_scale(depth) * (root_section_width / 2)
             )
         else:
             annotation_rect_center_y = (
-                parent_section_top_y
-                + self.get_section_rect_height_aspect_ratio_based(
-                    parent_section_rect_width
+                parent_section_build_side_y
+                + (
+                    self.get_section_rect_height_aspect_ratio_based(
+                        parent_section_rect_width
+                    )
+                    * 1.5
                 )
-                * 1.5
+                * self.build_direction_factor
             )
             annotation_rect_height = annotation_rect_width / 4
 
@@ -359,17 +409,30 @@ class TimelineVisualizer:
 
             # Connector line
             event_x = self.time_to_x(event.timestamp)
-            event_height: float
+
+            # NOTE: we make sure this matches the annotations this syncro is kinda sketch rn
+            event_y: float
+            event_width: float
 
             if height_is_depth_based:
-                event_height = (
-                    parent_section_top_y
+                event_y = (
+                    parent_section_build_side_y
                     + self.get_section_rect_height_depth_based(
                         root_section_width, depth
                     )
+                    * self.build_direction_factor
+                )
+                event_width = self.get_event_width_depth_based(
+                    root_section_width, depth + 1
                 )
             else:
-                event_height = parent_section_top_y + parent_section_rect_height / 2
+                event_y = (
+                    parent_section_build_side_y
+                    + (parent_section_rect_height / 2) * self.build_direction_factor
+                )
+                event_width = self.get_event_width_aspect_ratio_based(
+                    parent_section_rect_width
+                )
 
             text_point_x = annotation_rect_center_x
             text_point_y = annotation_rect_center_y
@@ -377,7 +440,7 @@ class TimelineVisualizer:
 
             self.commands.append(
                 f"generate_rectangle_between_2d(({text_point_x:.6f}, {text_point_y:.6f}), "
-                f"({event_x:.6f}, {event_height:.6f}), {0.002 * (root_section_width / 2) * self.get_depth_scale(depth):.6f}) | {connector_color}"
+                f"({event_x:.6f}, {event_y:.6f}), {event_width:.6f}) | {connector_color}"
             )
 
     def process_section(
@@ -392,13 +455,15 @@ class TimelineVisualizer:
         # NOTE: in this function we are constructing the next section on top of a previous section, bottom_y_current section is the base that we build up from
         # we are drawing a section, so we draw a rect, its events on top with its annotations and recurse on any other sections
 
+        # why do we do this?
         if section.end_time is None:
             return bottom_y_current_section
 
-        if root_section_width == -1:
+        iterating_on_root = root_section_width == -1
+        if iterating_on_root:
             x_start = self.time_to_x(section.start_time)
             x_end = self.time_to_x(section.end_time)
-            # NOTE: at the base level width = 2
+            # NOTE: at the base level width = 2 * scale
             root_section_width = x_end - x_start
 
         section_rect_width, section_rect_height, section_rect_center_y = (
@@ -426,8 +491,8 @@ class TimelineVisualizer:
             )
 
         # iterate and recurse
-        bottom_y_of_next_section = (
-            bottom_y_current_section + section_rect_height
+        non_build_side_y_of_next_section = (
+            bottom_y_current_section + section_rect_height * self.build_direction_factor
         )  # directly stack, no spacing
         child_section_index = 0
 
@@ -436,7 +501,7 @@ class TimelineVisualizer:
                 self.process_section(
                     child,
                     depth + 1,
-                    bottom_y_of_next_section,
+                    non_build_side_y_of_next_section,
                     child_section_index,
                     root_section_width,
                     height_is_depth_based,
@@ -463,8 +528,14 @@ class TimelineVisualizer:
                         section_rect_width
                     )
 
-                top_y_current_section = bottom_y_current_section + section_rect_height
-                event_center_y = top_y_current_section + event_height / 2
+                build_side_y_of_current_section = (
+                    bottom_y_current_section
+                    + section_rect_height * self.build_direction_factor
+                )
+                event_center_y = (
+                    build_side_y_of_current_section
+                    + (event_height / 2) * self.build_direction_factor
+                )
                 self.commands.append(
                     f"generate_rectangle({event_center_x:.6f}, {event_center_y:.6f}, 0.0, {event_width:.6f}, {event_height:.6f}) "
                     f"| ({event_color[0]:.3f}, {event_color[1]:.3f}, {event_color[2]:.3f})"
@@ -479,7 +550,12 @@ class TimelineVisualizer:
 
         self.draw_base_timeline()
         self.draw_ticks()
-        self.process_section(self.root_section, 0, -0.7, 0)
+        self.process_section(
+            self.root_section,
+            0,
+            self.base_timeline_position_y + self.timeline_tick_height / 2 + 0.1,
+            0,
+        )
         return self.commands
 
     def save(self, filename: str = "timeline_visualization.txt") -> List[str]:
@@ -493,6 +569,6 @@ class TimelineVisualizer:
 # Example usage
 if __name__ == "__main__":
     root = parse_log("logs.txt")
-    visualizer = TimelineVisualizer(root)
+    visualizer = TimelineVisualizer.from_config(root, ".parse_logs_config.json")
     commands = visualizer.save("invocations.txt")
     print(f"Generated {len(commands)} commands")
