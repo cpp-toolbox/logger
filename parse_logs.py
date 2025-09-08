@@ -192,7 +192,10 @@ class TimelineVisualizer:
                 f"generate_rectangle({x_pos:.3f}, {self.base_timeline_position_y}, 0.0, {self.timeline_tick_width}, {self.timeline_tick_height}) | (0.4, 0.4, 0.4)"
             )
             time_str = tick_timestamp.strftime("%H:%M:%S.%f")
-            text_x, text_y = x_pos - 0.05, self.base_timeline_position_y - 0.1
+            text_x, text_y = (
+                x_pos - 0.05,
+                self.base_timeline_position_y - 0.1 * self.build_direction_factor,
+            )
             self.used_text_areas.append((text_x, text_x + 0.1, text_y, text_y + 0.08))
             self.commands.append(
                 f'get_text_geometry("{time_str}", Rectangle(({text_x:.3f}, {text_y:.3f}, 0.1), 0.2, 0.16)) | (0.8, 0.8, 0.8)'
@@ -553,7 +556,8 @@ class TimelineVisualizer:
         self.process_section(
             self.root_section,
             0,
-            self.base_timeline_position_y + self.timeline_tick_height / 2 + 0.1,
+            self.base_timeline_position_y
+            + (self.timeline_tick_height / 2 + 0.1) * self.build_direction_factor,
             0,
         )
         return self.commands
