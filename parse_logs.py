@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timedelta
-from typing import List, Union, Tuple
+from typing import List, Union, Tuple, Optional
 
 
 class Event:
@@ -107,6 +107,17 @@ import json
 from enum import Enum
 
 
+from datetime import datetime
+
+
+def parse_spdlog_time(time_str: str) -> datetime:
+    """
+    Parse a spdlog-style timestamp string (e.g. "01:22:36.053622")
+    and return a datetime object with today's date.
+    """
+    return datetime.strptime(time_str, "%H:%M:%S.%f")
+
+
 class TimelineVisualizer:
     def __init__(
         self,
@@ -118,6 +129,7 @@ class TimelineVisualizer:
         base_timeline_position_y: float = 0,
         timeline_tick_width: float = 0.01,
         timeline_tick_height: float = 0.1,
+        custom_start_time: Optional[str] = None,
     ):
         self.root_section = root_section
         self.commands: List[str] = []
@@ -134,7 +146,11 @@ class TimelineVisualizer:
         self.timeline_tick_width = timeline_tick_width
         self.timeline_tick_height = timeline_tick_height
 
-        self.start_time: datetime = root_section.start_time
+        if custom_start_time is not None:
+            self.start_time: datetime = parse_spdlog_time(custom_start_time)
+        else:
+            self.start_time: datetime = root_section.start_time
+
         self.end_time: datetime = root_section.end_time
         self.total_duration: float = (
             self.end_time - self.start_time
