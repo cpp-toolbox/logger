@@ -146,20 +146,23 @@ class Logger {
             return max_len;
         }();
 
+        // Precompute the level padding
+        const std::string &level_str = level_to_string.at(lvl);
+        size_t padding = max_level_len - level_str.size();
+
         // Prepend section bars
         std::string prefix;
         for (int i = 0; i < section_depth_; ++i) {
             prefix += "| ";
         }
 
-        // Pad spaces after level name
-        const std::string &level_str = level_to_string.at(lvl);
-        size_t padding = max_level_len - level_str.size();
-
-        // Combine everything
-        msg = std::string(padding, ' ') + prefix + msg;
-
-        logger_->log(lvl, msg);
+        // Now split on newlines
+        std::istringstream iss(msg);
+        std::string line;
+        while (std::getline(iss, line)) {
+            std::string full_msg = std::string(padding, ' ') + prefix + line;
+            logger_->log(lvl, full_msg);
+        }
     }
 
     void reapply_formatting() {
