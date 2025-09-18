@@ -68,19 +68,83 @@ class Logger {
         reapply_formatting();
     }
 
+    // ====== Logging core ======
+    // Format-string overload (compile-time checked)
     template <typename... Args>
     void log(spdlog::level::level_enum lvl, fmt::format_string<Args...> fmt_str, Args &&...args) {
-        auto msg = fmt::format(fmt_str, std::forward<Args>(args)...);
+        format_and_log(lvl, fmt::format(fmt_str, std::forward<Args>(args)...));
+    }
 
+    // Direct runtime string overload
+    void log(spdlog::level::level_enum lvl, std::string_view msg) { format_and_log(lvl, std::string(msg)); }
+
+    // ====== Convenience wrappers ======
+    template <typename... Args> void trace(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::trace, fmt_str, std::forward<Args>(args)...);
+    }
+    void trace(std::string_view msg) { log(spdlog::level::trace, msg); }
+
+    template <typename... Args> void debug(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::debug, fmt_str, std::forward<Args>(args)...);
+    }
+    void debug(std::string_view msg) { log(spdlog::level::debug, msg); }
+
+    template <typename... Args> void info(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::info, fmt_str, std::forward<Args>(args)...);
+    }
+    void info(std::string_view msg) { log(spdlog::level::info, msg); }
+
+    template <typename... Args> void warn(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::warn, fmt_str, std::forward<Args>(args)...);
+    }
+    void warn(std::string_view msg) { log(spdlog::level::warn, msg); }
+
+    template <typename... Args> void error(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::err, fmt_str, std::forward<Args>(args)...);
+    }
+    void error(std::string_view msg) { log(spdlog::level::err, msg); }
+
+    template <typename... Args> void critical(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(spdlog::level::critical, fmt_str, std::forward<Args>(args)...);
+    }
+    void critical(std::string_view msg) { log(spdlog::level::critical, msg); }
+
+    // Sections still require formatting, but you could add overloads too if you want.
+    template <typename... Args> void start_section(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        start_section(spdlog::level::info, fmt_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void start_section(spdlog::level::level_enum lvl, fmt::format_string<Args...> fmt_str, Args &&...args) {
+        log(lvl, "=== start {} === {{", fmt::format(fmt_str, std::forward<Args>(args)...));
+        ++section_depth_;
+    }
+    template <typename... Args> void end_section(fmt::format_string<Args...> fmt_str, Args &&...args) {
+        end_section(spdlog::level::info, fmt_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void end_section(spdlog::level::level_enum lvl, fmt::format_string<Args...> fmt_str, Args &&...args) {
+        if (section_depth_ > 0)
+            --section_depth_;
+        log(lvl, "===   end {} === }}", fmt::format(fmt_str, std::forward<Args>(args)...));
+    }
+
+    void disable_all_levels() {
+        current_level_ = spdlog::level::off;
+        logger_->set_level(current_level_);
+    }
+
+  private:
+    void format_and_log(spdlog::level::level_enum lvl, std::string msg) {
         // Compute the maximum length of all level names
-        static size_t max_level_len = 0;
-        if (max_level_len == 0) {
+        static size_t max_level_len = [] {
+            size_t max_len = 0;
             for (const auto &p : level_to_string) {
-                if (p.second.size() > max_level_len) {
-                    max_level_len = p.second.size();
+                if (p.second.size() > max_len) {
+                    max_len = p.second.size();
                 }
             }
-        }
+            return max_len;
+        }();
 
         // Prepend section bars
         std::string prefix;
@@ -98,53 +162,6 @@ class Logger {
         logger_->log(lvl, msg);
     }
 
-    // Convenience wrappers
-    template <typename... Args> void trace(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        log(spdlog::level::trace, fmt_str, std::forward<Args>(args)...);
-    }
-    template <typename... Args> void debug(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        log(spdlog::level::debug, fmt_str, std::forward<Args>(args)...);
-    }
-    template <typename... Args> void info(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        log(spdlog::level::info, fmt_str, std::forward<Args>(args)...);
-    }
-    template <typename... Args> void warn(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        log(spdlog::level::warn, fmt_str, std::forward<Args>(args)...);
-    }
-    template <typename... Args> void error(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        log(spdlog::level::err, fmt_str, std::forward<Args>(args)...);
-    }
-    template <typename... Args> void critical(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        log(spdlog::level::critical, fmt_str, std::forward<Args>(args)...);
-    }
-
-    template <typename... Args> void start_section(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        start_section(spdlog::level::info, fmt_str, std::forward<Args>(args)...);
-    }
-
-    template <typename... Args>
-    void start_section(spdlog::level::level_enum lvl, fmt::format_string<Args...> fmt_str, Args &&...args) {
-        log(lvl, "=== start {} === {{", fmt::format(fmt_str, std::forward<Args>(args)...));
-        ++section_depth_;
-    }
-
-    template <typename... Args> void end_section(fmt::format_string<Args...> fmt_str, Args &&...args) {
-        end_section(spdlog::level::info, fmt_str, std::forward<Args>(args)...);
-    }
-
-    template <typename... Args>
-    void end_section(spdlog::level::level_enum lvl, fmt::format_string<Args...> fmt_str, Args &&...args) {
-        if (section_depth_ > 0)
-            --section_depth_;
-        log(lvl, "===   end {} === }}", fmt::format(fmt_str, std::forward<Args>(args)...));
-    }
-
-    void disable_all_levels() {
-        current_level_ = spdlog::level::off;
-        logger_->set_level(current_level_);
-    }
-
-  private:
     void reapply_formatting() {
         logger_->set_level(current_level_);
         for (auto &sink : logger_->sinks()) {
