@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timedelta
-from typing import List, Union, Tuple, Optional
+from typing import List, Union, Tuple, Optional, Callable, cast
 
 
 class Event:
@@ -41,7 +41,9 @@ class Section:
         return s
 
 
-def parse_log(filename: str) -> Section:
+def parse_log(
+    filename: str, message_transform: Optional[Callable[[str], str]] = None
+) -> Section:
     timestamp_re = re.compile(r"\[(.*?)\] \[(.*?)\]\s+(.*)")
     start_re = re.compile(r"^===\s*start\s+(.+?)\s*===\s*\{")
     end_re = re.compile(r"^===\s+end\s+(.+?)\s*===\s*\}")
@@ -69,6 +71,10 @@ def parse_log(filename: str) -> Section:
             # remove the prefixed "| " bars
             msg_clean = re.sub(r"^(?:\|\s*)+", "", msg)
 
+            # apply optional transform
+            if message_transform:
+                msg_clean = message_transform(msg_clean)
+
             # check section start
             start_match = start_re.match(msg_clean)
             if start_match:
@@ -89,7 +95,7 @@ def parse_log(filename: str) -> Section:
                     print(f"Warning: unmatched end marker for {section_name}")
                 continue
 
-            # normal event
+            # normal event if it's not a start or end event
             event = Event(timestamp, level, msg_clean)
             stack[-1].children.append(event)
 
@@ -140,6 +146,7 @@ class TimelineVisualizer:
 
         self.build_direction_factor = -1 if build_direction == "down" else 1
         self.ndc_units_per_second = ndc_units_per_second
+        print(f"just set ndc p s to: {self.ndc_units_per_second}")
         self.use_custom_root_section_height = use_custom_root_section_height
         self.custom_root_section_height = custom_root_section_height
         self.base_timeline_position_y = base_timeline_position_y
@@ -166,6 +173,8 @@ class TimelineVisualizer:
         valid_keys = {
             k: v for k, v in config.items() if k in cls.__init__.__code__.co_varnames
         }
+
+        print(f"Calling {cls.__name__}  {valid_keys}")
 
         return cls(root_section, **valid_keys)
 
@@ -413,25 +422,27 @@ class TimelineVisualizer:
             start_x = availble_area_x_start + i * (annotation_rect_width + margin)
             annotation_rect_center_x = start_x + annotation_rect_width / 2
 
+            # Scale height for multiline messages
+            label_text = event.message.strip()
+            num_lines = label_text.count("\n") + 1
+            adjusted_rect_height = annotation_rect_height * num_lines
+
+            # Background rectangle
             annotation_color = (0.4, 0.6, 0.8)
             self.commands.append(
-                f"generate_rectangle({annotation_rect_center_x:.6f}, {annotation_rect_center_y:.6f}, 0.0, {annotation_rect_width:.6f}, {annotation_rect_height:.6f}) "
-                f"| ({annotation_color[0]:.3f}, {annotation_color[1]:.3f}, {annotation_color[2]:.3f})"
+                f"generate_rectangle({annotation_rect_center_x:.6f}, {annotation_rect_center_y:.6f}, 0.0, "
+                f"{annotation_rect_width:.6f}, {adjusted_rect_height:.6f}) | "
+                f"({annotation_color[0]:.3f}, {annotation_color[1]:.3f}, {annotation_color[2]:.3f})"
             )
 
             # Label text
-            label_text = event.message.strip()
             self.commands.append(
                 f'get_text_geometry("{label_text}", Rectangle(({annotation_rect_center_x:.6f}, {annotation_rect_center_y:.6f}, 0.01), '
-                f"{annotation_rect_width:.6f}, {annotation_rect_height:.6f})) | (1.0, 1.0, 0.8)"
+                f"{annotation_rect_width:.6f}, {adjusted_rect_height:.6f})) | (1.0, 1.0, 0.8)"
             )
 
             # Connector line
             event_x = self.time_to_x(event.timestamp)
-
-            # NOTE: we make sure this matches the annotations this syncro is kinda sketch rn
-            event_y: float
-            event_width: float
 
             if height_is_depth_based:
                 event_y = (
@@ -453,8 +464,12 @@ class TimelineVisualizer:
                     parent_section_rect_width
                 )
 
+            # Connect from top/center of rectangle depending on your layout
+            text_point_y = (
+                annotation_rect_center_y
+                + (adjusted_rect_height - annotation_rect_height) / 2
+            )
             text_point_x = annotation_rect_center_x
-            text_point_y = annotation_rect_center_y
             connector_color = (0.6, 0.6, 0.6)
 
             self.commands.append(
@@ -586,9 +601,47 @@ class TimelineVisualizer:
         return commands
 
 
-# Example usage
+from typing import Callable, Optional
+import importlib.util
+import os
+
+
+def load_user_transform(path: str) -> Optional[Callable[[str], str]]:
+    """Load a user-defined transform function from a Python file.
+
+    Returns:
+        A callable (msg: str) -> str if successful, otherwise None.
+    """
+    if not os.path.isfile(path):
+        return None
+
+    try:
+        spec = importlib.util.spec_from_file_location("log_message_transform", path)
+        if spec is None or spec.loader is None:
+            return None
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as e:
+        print(f"Failed to load user transform from {path}: {e}")
+        return None
+
+    transform_fn = getattr(module, "transform", None)
+    if callable(transform_fn):
+        return cast(Callable[[str], str], transform_fn)
+
+    print(f"No callable 'transform' found in {path}")
+    return None
+
+
 if __name__ == "__main__":
-    root = parse_log("logs.txt")
+    user_transform = load_user_transform("log_message_transform.py")
+    if user_transform:
+        print("got custom transform")
+    else:
+        print("NO custom transform")
+
+    root = parse_log("logs.txt", user_transform)
     visualizer = TimelineVisualizer.from_config(root, ".parse_logs_config.json")
     commands = visualizer.save("invocations.txt")
     print(f"Generated {len(commands)} commands")
