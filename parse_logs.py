@@ -2,6 +2,8 @@ import re
 from datetime import datetime, timedelta
 from typing import List, Union, Tuple, Optional, Callable, cast
 
+# TODO: need to get dynamic height working, it's not doing that on the labels.
+
 
 class Event:
     def __init__(self, timestamp: datetime, level: str, message: str):
@@ -422,27 +424,25 @@ class TimelineVisualizer:
             start_x = availble_area_x_start + i * (annotation_rect_width + margin)
             annotation_rect_center_x = start_x + annotation_rect_width / 2
 
-            # Scale height for multiline messages
-            label_text = event.message.strip()
-            num_lines = label_text.count("\n") + 1
-            adjusted_rect_height = annotation_rect_height * num_lines
-
-            # Background rectangle
             annotation_color = (0.4, 0.6, 0.8)
             self.commands.append(
-                f"generate_rectangle({annotation_rect_center_x:.6f}, {annotation_rect_center_y:.6f}, 0.0, "
-                f"{annotation_rect_width:.6f}, {adjusted_rect_height:.6f}) | "
-                f"({annotation_color[0]:.3f}, {annotation_color[1]:.3f}, {annotation_color[2]:.3f})"
+                f"generate_rectangle({annotation_rect_center_x:.6f}, {annotation_rect_center_y:.6f}, 0.0, {annotation_rect_width:.6f}, {annotation_rect_height:.6f}) "
+                f"| ({annotation_color[0]:.3f}, {annotation_color[1]:.3f}, {annotation_color[2]:.3f})"
             )
 
             # Label text
+            label_text = event.message.strip()
             self.commands.append(
                 f'get_text_geometry("{label_text}", Rectangle(({annotation_rect_center_x:.6f}, {annotation_rect_center_y:.6f}, 0.01), '
-                f"{annotation_rect_width:.6f}, {adjusted_rect_height:.6f})) | (1.0, 1.0, 0.8)"
+                f"{annotation_rect_width:.6f}, {annotation_rect_height:.6f})) | (1.0, 1.0, 0.8)"
             )
 
             # Connector line
             event_x = self.time_to_x(event.timestamp)
+
+            # NOTE: we make sure this matches the annotations this syncro is kinda sketch rn
+            event_y: float
+            event_width: float
 
             if height_is_depth_based:
                 event_y = (
@@ -464,12 +464,8 @@ class TimelineVisualizer:
                     parent_section_rect_width
                 )
 
-            # Connect from top/center of rectangle depending on your layout
-            text_point_y = (
-                annotation_rect_center_y
-                + (adjusted_rect_height - annotation_rect_height) / 2
-            )
             text_point_x = annotation_rect_center_x
+            text_point_y = annotation_rect_center_y
             connector_color = (0.6, 0.6, 0.6)
 
             self.commands.append(
