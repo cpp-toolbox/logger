@@ -638,6 +638,13 @@ if __name__ == "__main__":
         print("NO custom transform")
 
     root = parse_log("logs.txt", user_transform)
-    visualizer = TimelineVisualizer.from_config(root, ".parse_logs_config.json")
+
+    config_path = ".parse_logs_config.json"
+    if os.path.exists(config_path):
+        visualizer = TimelineVisualizer.from_config(root, config_path)
+    else:
+        print(f"Config file '{config_path}' not found, using default visualizer")
+        visualizer = TimelineVisualizer(root)
+
     commands = visualizer.save("invocations.txt")
     print(f"Generated {len(commands)} commands")
