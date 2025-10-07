@@ -11,6 +11,7 @@
 
 #include <map>
 #include <string_view>
+#include <sstream>
 
 const std::map<spdlog::level::level_enum, std::string> level_to_string = {
     {spdlog::level::trace, "trace"}, {spdlog::level::debug, "debug"}, {spdlog::level::info, "info"},

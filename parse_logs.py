@@ -130,13 +130,15 @@ class TimelineVisualizer:
     def __init__(
         self,
         root_section: Section,
-        build_direction: str = "down",
+        build_direction: str = "up",
         ndc_units_per_second: float = 0.5,
         use_custom_root_section_height: bool = True,
         custom_root_section_height: float = 0.01,
         base_timeline_position_y: float = 0,
+        draw_timeline: bool = True,
         timeline_tick_width: float = 0.01,
         timeline_tick_height: float = 0.1,
+        # NOTE: custom start time is of the form that the logger prints out for times
         custom_start_time: Optional[str] = None,
     ):
         self.root_section = root_section
@@ -148,10 +150,10 @@ class TimelineVisualizer:
 
         self.build_direction_factor = -1 if build_direction == "down" else 1
         self.ndc_units_per_second = ndc_units_per_second
-        print(f"just set ndc p s to: {self.ndc_units_per_second}")
         self.use_custom_root_section_height = use_custom_root_section_height
         self.custom_root_section_height = custom_root_section_height
         self.base_timeline_position_y = base_timeline_position_y
+        self.draw_timeline = draw_timeline
         self.timeline_tick_width = timeline_tick_width
         self.timeline_tick_height = timeline_tick_height
 
@@ -167,7 +169,10 @@ class TimelineVisualizer:
 
     @classmethod
     def from_config(cls, root_section: "Section", config_path: str):
-        """Factory method to create a TimelineVisualizer from a JSON config file."""
+        """Factory method to create a TimelineVisualizer from a JSON config file.
+
+        Note that the config file's syntax is just json with the key being the TimelineVisualizer attribute and the value the value you want to use.
+        """
         with open(config_path, "r") as f:
             config = json.load(f)
 
@@ -578,8 +583,10 @@ class TimelineVisualizer:
         self.commands.clear()
         self.used_text_areas.clear()
 
-        self.draw_base_timeline()
-        self.draw_ticks()
+        if self.draw_timeline:
+            self.draw_base_timeline()
+            self.draw_ticks()
+
         self.process_section(
             self.root_section,
             0,
@@ -630,21 +637,44 @@ def load_user_transform(path: str) -> Optional[Callable[[str], str]]:
     return None
 
 
+import argparse
+import sys
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Parse a log file and generate timeline visualization commands."
+    )
+    parser.add_argument("log_file", help="Path to the log file to parse.")
+    parser.add_argument(
+        "--config",
+        default=".parse_logs_config.json",
+        help="Path to the visualization config file (default: .parse_logs_config.json)",
+    )
+    parser.add_argument(
+        "--output",
+        default="invocations.txt",
+        help="Path to save the generated commands (default: invocations.txt)",
+    )
+
+    args = parser.parse_args()
+
+    if not os.path.exists(args.log_file):
+        print(f"Error: Log file '{args.log_file}' does not exist.", file=sys.stderr)
+        sys.exit(1)
+
     user_transform = load_user_transform("log_message_transform.py")
     if user_transform:
         print("got custom transform")
     else:
         print("NO custom transform")
 
-    root = parse_log("logs.txt", user_transform)
+    root = parse_log(args.log_file, user_transform)
 
-    config_path = ".parse_logs_config.json"
-    if os.path.exists(config_path):
-        visualizer = TimelineVisualizer.from_config(root, config_path)
+    if os.path.exists(args.config):
+        visualizer = TimelineVisualizer.from_config(root, args.config)
     else:
-        print(f"Config file '{config_path}' not found, using default visualizer")
+        print(f"Config file '{args.config}' not found, using default visualizer")
         visualizer = TimelineVisualizer(root)
 
-    commands = visualizer.save("invocations.txt")
-    print(f"Generated {len(commands)} commands")
+    commands = visualizer.save(args.output)
+    print(f"Generated {len(commands)} commands -> {args.output}")
