@@ -38,6 +38,13 @@ class Logger {
         configure(current_level_, current_pattern_);
     }
 
+    spdlog::level::level_enum get_current_level() const { return current_level_; }
+
+    void set_level(spdlog::level::level_enum lvl) {
+        current_level_ = lvl;
+        logger_->set_level(lvl);
+    }
+
     void remove_all_sinks() { logger_->sinks().clear(); }
 
     void add_sink(std::shared_ptr<spdlog::sinks::sink> sink) {
@@ -179,22 +186,92 @@ class Logger {
     std::string current_pattern_;
 };
 
+/**
+ * @class LogSection
+ * @brief RAII helper that automatically creates and closes a structured log section, with an optional mode to
+ * temporarily disable all logging within its scope.
+ *
+ * When constructed, this class begins a new log section via `Logger::start_section()`. When it goes out of scope, it
+ * ends the section automatically.
+ *
+ * If constructed with `disable_logging = true`, it will also temporarily disable all logging levels for the given
+ * `Logger` while the section is active, restoring the previous level upon destruction.
+ *
+ * The purpose of being able to disable the logger is that you don't have to remove all of the logging statements you
+ * previously wrote down, the benefit being that if you ever need to re-debug or analyze the code again you still have
+ * an easy way of re-enabling that instead of having to re-write all the logging statements again
+ *
+ * This makes it possible to both group logs and silence verbose internal sections
+ * using the same class.
+ *
+ * Example usage:
+ * @code
+ * {
+ *     // Normal section
+ *     LogSection section(global_logger, "Gameplay Update");
+ *     global_logger.info("running physics...");
+ *
+ *     // Muted section
+ *     {
+ *         LogSection muted_section(global_logger, "Pathfinding Update", true);
+ *         global_logger.info("this will NOT be logged");
+ *     }
+ *
+ *     global_logger.info("logging restored");
+ * } // Sections automatically end here
+ * @endcode
+ */
 class LogSection {
   public:
+    /**
+     * @brief Constructs a new log section.
+     *
+     * Starts a new logging section and optionally disables all logging output
+     * for the given logger while this object exists.
+     *
+     * @tparam Args Variadic template arguments for `fmt::format`.
+     * @param logger Reference to the logger instance managing this section.
+     * @param fmt_str Format string specifying the section name.
+     * @param args Arguments to format into the section name.
+     * @param disable_logging Whether to temporarily disable logging in this section.
+     */
     template <typename... Args>
-    LogSection(Logger &logger, fmt::format_string<Args...> fmt_str, Args &&...args)
-        : logger_(logger), section_name_(fmt::format(fmt_str, std::forward<Args>(args)...)) {
-        logger_.start_section("{}", section_name_);
+    LogSection(Logger &logger, fmt::format_string<Args...> fmt_str, Args &&...args, bool disable_logging = false)
+        : logger_(logger), section_name_(fmt::format(fmt_str, std::forward<Args>(args)...)),
+          disable_logging_(disable_logging), previous_level_(logger.get_current_level()) {
+
+        if (disable_logging_) {
+            logger_.disable_all_levels();
+        } else {
+            logger_.start_section("{}", section_name_);
+        }
     }
 
-    ~LogSection() { logger_.end_section("{}", section_name_); }
+    /**
+     * @brief Destructor that automatically ends the log section.
+     *
+     * If logging was disabled during construction, the previous log level
+     * is restored before ending the section.
+     */
+    ~LogSection() {
+        if (disable_logging_) {
+            logger_.set_level(previous_level_);
+        } else {
+            logger_.end_section("{}", section_name_);
+        }
+    }
 
+    /// Deleted copy constructor to prevent accidental copies.
     LogSection(const LogSection &) = delete;
+
+    /// Deleted copy assignment operator to prevent accidental assignments.
     LogSection &operator=(const LogSection &) = delete;
 
   private:
-    Logger &logger_;
-    std::string section_name_; // store formatted name here
+    Logger &logger_;                           ///< Reference to the logger that handles this section.
+    std::string section_name_;                 ///< The formatted section name used in log output.
+    bool disable_logging_;                     ///< Whether logging was temporarily disabled for this section.
+    spdlog::level::level_enum previous_level_; ///< The log level to restore after destruction.
 };
 
 extern Logger global_logger;
