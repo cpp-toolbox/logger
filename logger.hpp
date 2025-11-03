@@ -52,8 +52,8 @@ class Logger {
         reapply_formatting(); // <-- ensure new sink matches
     }
 
-    void add_file_sink(const std::string &file_path, bool truncate = false) {
-        auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(file_path, truncate);
+    void add_file_sink(const std::string &file_path, bool overwrite_file = true) {
+        auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(file_path, overwrite_file);
         add_sink(file_sink);
     }
 
