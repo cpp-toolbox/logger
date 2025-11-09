@@ -229,16 +229,15 @@ class LogSection {
      * Starts a new logging section and optionally disables all logging output
      * for the given logger while this object exists.
      *
-     * @tparam Args Variadic template arguments for `fmt::format`.
      * @param logger Reference to the logger instance managing this section.
-     * @param fmt_str Format string specifying the section name.
-     * @param args Arguments to format into the section name.
+     * @param section_name The name of the section.
      * @param disable_logging Whether to temporarily disable logging in this section.
+     *
+     * @note we can't use variadic args because we want a default argument for disable logging at the end.
      */
-    template <typename... Args>
-    LogSection(Logger &logger, fmt::format_string<Args...> fmt_str, Args &&...args, bool disable_logging = false)
-        : logger_(logger), section_name_(fmt::format(fmt_str, std::forward<Args>(args)...)),
-          disable_logging_(disable_logging), previous_level_(logger.get_current_level()) {
+    LogSection(Logger &logger, const std::string &section_name, bool disable_logging = false)
+        : logger_(logger), section_name_(section_name), disable_logging_(disable_logging),
+          previous_level_(logger.get_current_level()) {
 
         if (disable_logging_) {
             logger_.disable_all_levels();
@@ -269,7 +268,7 @@ class LogSection {
 
   private:
     Logger &logger_;                           ///< Reference to the logger that handles this section.
-    std::string section_name_;                 ///< The formatted section name used in log output.
+    std::string section_name_;                 ///< The section name used in log output.
     bool disable_logging_;                     ///< Whether logging was temporarily disabled for this section.
     spdlog::level::level_enum previous_level_; ///< The log level to restore after destruction.
 };
