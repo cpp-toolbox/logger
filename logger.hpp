@@ -231,12 +231,13 @@ class LogSection {
      *
      * @param logger Reference to the logger instance managing this section.
      * @param section_name The name of the section.
-     * @param disable_logging Whether to temporarily disable logging in this section.
+     * @param logging_enabled Whether logging is enabled for this section, when false it will temporarily disable
+     * logging in this section.
      *
      * @note we can't use variadic args because we want a default argument for disable logging at the end.
      */
-    LogSection(Logger &logger, const std::string &section_name, bool disable_logging = false)
-        : logger_(logger), section_name_(section_name), disable_logging_(disable_logging),
+    LogSection(Logger &logger, const std::string &section_name, bool logging_enabled = true)
+        : logger_(logger), section_name_(section_name), disable_logging_(not logging_enabled),
           previous_level_(logger.get_current_level()) {
 
         if (disable_logging_) {
