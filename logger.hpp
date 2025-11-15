@@ -14,8 +14,8 @@
 #include <sstream>
 
 const std::map<spdlog::level::level_enum, std::string> level_to_string = {
-    {spdlog::level::trace, "trace"}, {spdlog::level::debug, "debug"}, {spdlog::level::info, "info"},
-    {spdlog::level::warn, "warn"},   {spdlog::level::err, "err"},     {spdlog::level::critical, "critical"},
+    {spdlog::level::trace, "trace"},  {spdlog::level::debug, "debug"}, {spdlog::level::info, "info"},
+    {spdlog::level::warn, "warning"}, {spdlog::level::err, "error"},   {spdlog::level::critical, "critical"},
     {spdlog::level::off, "off"}};
 
 // NOTE: this is replacing everything else.
