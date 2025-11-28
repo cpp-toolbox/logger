@@ -1,6 +1,8 @@
 import re
 from datetime import datetime, timedelta
-from typing import List, Union, Tuple, Optional
+from typing import List, Union, Tuple, Optional, Callable, cast
+
+# TODO: need to get dynamic height working, it's not doing that on the labels.
 
 
 class Event:
@@ -41,7 +43,9 @@ class Section:
         return s
 
 
-def parse_log(filename: str) -> Section:
+def parse_log(
+    filename: str, message_transform: Optional[Callable[[str], str]] = None
+) -> Section:
     timestamp_re = re.compile(r"\[(.*?)\] \[(.*?)\]\s+(.*)")
     start_re = re.compile(r"^===\s*start\s+(.+?)\s*===\s*\{")
     end_re = re.compile(r"^===\s+end\s+(.+?)\s*===\s*\}")
@@ -69,6 +73,10 @@ def parse_log(filename: str) -> Section:
             # remove the prefixed "| " bars
             msg_clean = re.sub(r"^(?:\|\s*)+", "", msg)
 
+            # apply optional transform
+            if message_transform:
+                msg_clean = message_transform(msg_clean)
+
             # check section start
             start_match = start_re.match(msg_clean)
             if start_match:
@@ -89,7 +97,7 @@ def parse_log(filename: str) -> Section:
                     print(f"Warning: unmatched end marker for {section_name}")
                 continue
 
-            # normal event
+            # normal event if it's not a start or end event
             event = Event(timestamp, level, msg_clean)
             stack[-1].children.append(event)
 
@@ -122,13 +130,15 @@ class TimelineVisualizer:
     def __init__(
         self,
         root_section: Section,
-        build_direction: str = "down",
+        build_direction: str = "up",
         ndc_units_per_second: float = 0.5,
         use_custom_root_section_height: bool = True,
         custom_root_section_height: float = 0.01,
         base_timeline_position_y: float = 0,
+        draw_timeline: bool = True,
         timeline_tick_width: float = 0.01,
         timeline_tick_height: float = 0.1,
+        # NOTE: custom start time is of the form that the logger prints out for times
         custom_start_time: Optional[str] = None,
     ):
         self.root_section = root_section
@@ -143,6 +153,7 @@ class TimelineVisualizer:
         self.use_custom_root_section_height = use_custom_root_section_height
         self.custom_root_section_height = custom_root_section_height
         self.base_timeline_position_y = base_timeline_position_y
+        self.draw_timeline = draw_timeline
         self.timeline_tick_width = timeline_tick_width
         self.timeline_tick_height = timeline_tick_height
 
@@ -158,7 +169,10 @@ class TimelineVisualizer:
 
     @classmethod
     def from_config(cls, root_section: "Section", config_path: str):
-        """Factory method to create a TimelineVisualizer from a JSON config file."""
+        """Factory method to create a TimelineVisualizer from a JSON config file.
+
+        Note that the config file's syntax is just json with the key being the TimelineVisualizer attribute and the value the value you want to use.
+        """
         with open(config_path, "r") as f:
             config = json.load(f)
 
@@ -166,6 +180,8 @@ class TimelineVisualizer:
         valid_keys = {
             k: v for k, v in config.items() if k in cls.__init__.__code__.co_varnames
         }
+
+        print(f"Calling {cls.__name__}  {valid_keys}")
 
         return cls(root_section, **valid_keys)
 
@@ -567,8 +583,10 @@ class TimelineVisualizer:
         self.commands.clear()
         self.used_text_areas.clear()
 
-        self.draw_base_timeline()
-        self.draw_ticks()
+        if self.draw_timeline:
+            self.draw_base_timeline()
+            self.draw_ticks()
+
         self.process_section(
             self.root_section,
             0,
@@ -586,9 +604,77 @@ class TimelineVisualizer:
         return commands
 
 
-# Example usage
+from typing import Callable, Optional
+import importlib.util
+import os
+
+
+def load_user_transform(path: str) -> Optional[Callable[[str], str]]:
+    """Load a user-defined transform function from a Python file.
+
+    Returns:
+        A callable (msg: str) -> str if successful, otherwise None.
+    """
+    if not os.path.isfile(path):
+        return None
+
+    try:
+        spec = importlib.util.spec_from_file_location("log_message_transform", path)
+        if spec is None or spec.loader is None:
+            return None
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as e:
+        print(f"Failed to load user transform from {path}: {e}")
+        return None
+
+    transform_fn = getattr(module, "transform", None)
+    if callable(transform_fn):
+        return cast(Callable[[str], str], transform_fn)
+
+    print(f"No callable 'transform' found in {path}")
+    return None
+
+
+import argparse
+import sys
+
 if __name__ == "__main__":
-    root = parse_log("logs.txt")
-    visualizer = TimelineVisualizer.from_config(root, ".parse_logs_config.json")
-    commands = visualizer.save("invocations.txt")
-    print(f"Generated {len(commands)} commands")
+    parser = argparse.ArgumentParser(
+        description="Parse a log file and generate timeline visualization commands."
+    )
+    parser.add_argument("log_file", help="Path to the log file to parse.")
+    parser.add_argument(
+        "--config",
+        default=".parse_logs_config.json",
+        help="Path to the visualization config file (default: .parse_logs_config.json)",
+    )
+    parser.add_argument(
+        "--output",
+        default="invocations.txt",
+        help="Path to save the generated commands (default: invocations.txt)",
+    )
+
+    args = parser.parse_args()
+
+    if not os.path.exists(args.log_file):
+        print(f"Error: Log file '{args.log_file}' does not exist.", file=sys.stderr)
+        sys.exit(1)
+
+    user_transform = load_user_transform("log_message_transform.py")
+    if user_transform:
+        print("got custom transform")
+    else:
+        print("NO custom transform")
+
+    root = parse_log(args.log_file, user_transform)
+
+    if os.path.exists(args.config):
+        visualizer = TimelineVisualizer.from_config(root, args.config)
+    else:
+        print(f"Config file '{args.config}' not found, using default visualizer")
+        visualizer = TimelineVisualizer(root)
+
+    commands = visualizer.save(args.output)
+    print(f"Generated {len(commands)} commands -> {args.output}")
