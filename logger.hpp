@@ -13,6 +13,8 @@
 #include <string_view>
 #include <sstream>
 
+#include "sbpt_generated_includes.hpp"
+
 const std::map<spdlog::level::level_enum, std::string> level_to_string = {
     {spdlog::level::trace, "trace"},  {spdlog::level::debug, "debug"}, {spdlog::level::info, "info"},
     {spdlog::level::warn, "warning"}, {spdlog::level::err, "error"},   {spdlog::level::critical, "critical"},
@@ -274,6 +276,25 @@ class LogSection {
     spdlog::level::level_enum previous_level_; ///< The log level to restore after destruction.
 };
 
-extern Logger global_logger;
+extern LazyConstruction<Logger, std::string> global_logger;
+
+class GlobalLogSection {
+  public:
+    /**
+     * @brief Constructs a new global log section.
+     *
+     * Starts a new logging section in the global logger and optionally disables
+     * logging output while this object exists.
+     *
+     * @param section_name The name of the section.
+     * @param logging_enabled Whether logging is enabled for this section.
+     */
+
+    GlobalLogSection(const std::string &section_name, bool logging_enabled = true)
+        : inner_section(*global_logger, section_name, logging_enabled) {}
+
+  private:
+    LogSection inner_section;
+};
 
 #endif

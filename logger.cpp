@@ -1,3 +1,3 @@
 #include "logger.hpp"
 
-Logger global_logger{"global_logger"};
+LazyConstruction<Logger, std::string> global_logger("global_logger");
