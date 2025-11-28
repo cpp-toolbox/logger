@@ -1,116 +1,9 @@
-import re
 from datetime import datetime, timedelta
-from typing import List, Union, Tuple, Optional, Callable, cast
-
-# TODO: need to get dynamic height working, it's not doing that on the labels.
-
-
-class Event:
-    def __init__(self, timestamp: datetime, level: str, message: str):
-        self.timestamp = timestamp
-        self.level = level
-        self.message = message
-
-    def __repr__(self):
-        return f"Event({self.timestamp.time()}, {self.level}, {self.message})"
-
-
-class Section:
-    def __init__(self, name: str, start_time: datetime):
-        self.name = name
-        self.start_time = start_time
-        self.end_time = None
-        self.children: List[Union[Section, Event]] = []
-
-    def close(self, end_time: datetime):
-        self.end_time = end_time
-
-    def duration(self):
-        if self.start_time and self.end_time:
-            return (self.end_time - self.start_time).total_seconds() * 1e6  # µs
-        return None
-
-    def __repr__(self, indent=0):
-        ind = "  " * indent
-        dur = f" ({self.duration():.0f}µs)" if self.duration() else ""
-        s = f"{ind}Section({self.name}, {self.start_time.time()} -> {self.end_time.time() if self.end_time else '...'}{dur}):\n"
-        for child in self.children:
-            s += (
-                child.__repr__(indent + 1)
-                if isinstance(child, Section)
-                else f"{ind}  {child}\n"
-            )
-        return s
-
-
-def parse_log(
-    filename: str, message_transform: Optional[Callable[[str], str]] = None
-) -> Section:
-    timestamp_re = re.compile(r"\[(.*?)\] \[(.*?)\]\s+(.*)")
-    start_re = re.compile(r"^===\s*start\s+(.+?)\s*===\s*\{")
-    end_re = re.compile(r"^===\s+end\s+(.+?)\s*===\s*\}")
-
-    root = Section("root", None)
-    stack: List[Section] = [root]
-
-    first_timestamp = None
-    last_timestamp = None
-
-    with open(filename, "r") as f:
-        for line_num, line in enumerate(f, 1):
-            match = timestamp_re.match(line.strip())
-            if not match:
-                continue
-
-            ts_str, level, msg = match.groups()
-            timestamp = datetime.strptime(ts_str, "%H:%M:%S.%f")
-
-            if first_timestamp is None:
-                first_timestamp = timestamp
-                root.start_time = timestamp
-            last_timestamp = timestamp
-
-            # remove the prefixed "| " bars
-            msg_clean = re.sub(r"^(?:\|\s*)+", "", msg)
-
-            # apply optional transform
-            if message_transform:
-                msg_clean = message_transform(msg_clean)
-
-            # check section start
-            start_match = start_re.match(msg_clean)
-            if start_match:
-                section_name = start_match.group(1)
-                section = Section(section_name, timestamp)
-                stack[-1].children.append(section)
-                stack.append(section)
-                continue
-
-            # check section end
-            end_match = end_re.match(msg_clean)
-            if end_match:
-                section_name = end_match.group(1)
-                if stack and stack[-1].name == section_name:
-                    stack[-1].close(timestamp)
-                    stack.pop()
-                else:
-                    print(f"Warning: unmatched end marker for {section_name}")
-                continue
-
-            # normal event if it's not a start or end event
-            event = Event(timestamp, level, msg_clean)
-            stack[-1].children.append(event)
-
-    if last_timestamp:
-        root.close(last_timestamp)
-
-    return root
-
-
-from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List, Tuple, cast, Optional
 import colorsys
 import json
+
+from logger.parse_logs import parse_logs, LogSection, LogMessage
 
 from enum import Enum
 
@@ -129,7 +22,7 @@ def parse_spdlog_time(time_str: str) -> datetime:
 class TimelineVisualizer:
     def __init__(
         self,
-        root_section: Section,
+        root_section: LogSection,
         build_direction: str = "up",
         ndc_units_per_second: float = 0.5,
         use_custom_root_section_height: bool = True,
@@ -168,7 +61,7 @@ class TimelineVisualizer:
         ).total_seconds() * 1e6  # microseconds
 
     @classmethod
-    def from_config(cls, root_section: "Section", config_path: str):
+    def from_config(cls, root_section: "LogSection", config_path: str):
         """Factory method to create a TimelineVisualizer from a JSON config file.
 
         Note that the config file's syntax is just json with the key being the TimelineVisualizer attribute and the value the value you want to use.
@@ -255,7 +148,7 @@ class TimelineVisualizer:
 
     def draw_section_rect(
         self,
-        section: Section,
+        section: LogSection,
         depth: int,
         section_index: int,
         bottom_y_section: float,
@@ -327,16 +220,16 @@ class TimelineVisualizer:
 
         return width, height, rect_center_y
 
-    def group_event_sequences(self, section: "Section"):
+    def group_event_sequences(self, section: "LogSection"):
         children_sorted = sorted(
             section.children,
-            key=lambda c: c.timestamp if isinstance(c, Event) else c.start_time,
+            key=lambda c: c.timestamp if isinstance(c, LogMessage) else c.start_time,
         )
-        event_sequences: List[List["Event"]] = []
-        current_seq: List["Event"] = []
+        event_sequences: List[List["LogMessage"]] = []
+        current_seq: List["LogMessage"] = []
 
         for child in children_sorted:
-            if isinstance(child, Event):
+            if isinstance(child, LogMessage):
                 current_seq.append(child)
             else:
                 if current_seq:
@@ -348,8 +241,8 @@ class TimelineVisualizer:
 
     def draw_event_sequence_annotations(
         self,
-        event_sequence: List[Event],
-        parent_section: Section,
+        event_sequence: List[LogMessage],
+        parent_section: LogSection,
         depth: int,
         parent_section_rect_center_y: float,
         parent_section_rect_width: float,
@@ -363,7 +256,7 @@ class TimelineVisualizer:
         sections_ending_before_first_event = [
             s
             for s in parent_section.children
-            if isinstance(s, Section) and s.end_time <= first_event.timestamp
+            if isinstance(s, LogSection) and s.end_time <= first_event.timestamp
         ]
         left_bound_time = max(
             [s.end_time for s in sections_ending_before_first_event],
@@ -373,7 +266,7 @@ class TimelineVisualizer:
         sections_starting_after_last_event = [
             s
             for s in parent_section.children
-            if isinstance(s, Section) and s.start_time >= last_event.timestamp
+            if isinstance(s, LogSection) and s.start_time >= last_event.timestamp
         ]
         right_bound_time = min(
             [s.start_time for s in sections_starting_after_last_event],
@@ -480,7 +373,7 @@ class TimelineVisualizer:
 
     def process_section(
         self,
-        section: Section,
+        section: LogSection,
         depth: int,
         bottom_y_current_section: float,
         section_index_for_labelling: int = 0,
@@ -532,7 +425,7 @@ class TimelineVisualizer:
         child_section_index = 0
 
         for child in section.children:
-            if isinstance(child, Section):
+            if isinstance(child, LogSection):
                 self.process_section(
                     child,
                     depth + 1,
@@ -542,7 +435,7 @@ class TimelineVisualizer:
                     height_is_depth_based,
                 )
                 child_section_index += 1
-            elif isinstance(child, Event):
+            elif isinstance(child, LogMessage):
                 # NOTE: regular event drawing here.
                 event_center_x = self.time_to_x(child.timestamp)
                 event_color = (1.0, 0.8, 0.4)
@@ -668,7 +561,7 @@ if __name__ == "__main__":
     else:
         print("NO custom transform")
 
-    root = parse_log(args.log_file, user_transform)
+    root = parse_logs(args.log_file, user_transform)
 
     if os.path.exists(args.config):
         visualizer = TimelineVisualizer.from_config(root, args.config)
