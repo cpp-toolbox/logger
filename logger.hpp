@@ -12,6 +12,9 @@
 #include <map>
 #include <string_view>
 
+#include "sbpt_generated_includes.hpp"
+
+
 const std::map<spdlog::level::level_enum, std::string> level_to_string = {
     {spdlog::level::trace, "trace"}, {spdlog::level::debug, "debug"}, {spdlog::level::info, "info"},
     {spdlog::level::warn, "warn"},   {spdlog::level::err, "err"},     {spdlog::level::critical, "critical"},
@@ -176,6 +179,23 @@ class LogSection {
     std::string section_name_; // store formatted name here
 };
 
-extern Logger global_logger;
+extern LazyConstruction<Logger, std::string> global_logger;
+
+class GlobalLogSection {
+  public:
+    template <typename... Args>
+    GlobalLogSection(fmt::format_string<Args...> fmt_str, Args &&...args)
+        : section_name_(fmt::format(fmt_str, std::forward<Args>(args)...)) {
+        global_logger->start_section("{}", section_name_);
+    }
+
+    ~GlobalLogSection() { global_logger->end_section("{}", section_name_); }
+
+    GlobalLogSection(const GlobalLogSection &) = delete;
+    GlobalLogSection &operator=(const GlobalLogSection &) = delete;
+
+  private:
+    std::string section_name_;
+};
 
 #endif
