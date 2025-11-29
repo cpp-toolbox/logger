@@ -205,7 +205,7 @@ class TimelineVisualizer:
             return f"{duration_us:.0f}µs"  # fallback
 
         # Section text label with duration
-        duration = section.duration()
+        duration = section.duration_microseconds()
         duration_text = (
             f" ({format_duration_us(duration)})" if duration is not None else ""
         )
