@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 from datetime import datetime, timedelta
 from typing import List, Tuple, cast, Optional
 import colorsys
 import json
 
-from logger.parse_logs import parse_logs, LogSection, LogMessage
-
-from enum import Enum
+from logger.data_structure_utils.tree import TreeNode
+from logger.parse_logs import parse_logs, LogSection, LogMessage, LogEntry
 
 
 from datetime import datetime
@@ -22,7 +23,7 @@ def parse_spdlog_time(time_str: str) -> datetime:
 class TimelineVisualizer:
     def __init__(
         self,
-        root_section: LogSection,
+        root_section: TreeNode[LogEntry],
         build_direction: str = "up",
         ndc_units_per_second: float = 0.5,
         use_custom_root_section_height: bool = True,
@@ -34,6 +35,7 @@ class TimelineVisualizer:
         # NOTE: custom start time is of the form that the logger prints out for times
         custom_start_time: Optional[str] = None,
     ):
+        assert isinstance(root_section.data, LogSection)
         self.root_section = root_section
         self.commands: List[str] = []
         # NOTE: possibly unused?
@@ -53,15 +55,17 @@ class TimelineVisualizer:
         if custom_start_time is not None:
             self.start_time: datetime = parse_spdlog_time(custom_start_time)
         else:
-            self.start_time: datetime = root_section.start_time
+            self.start_time: datetime = root_section.data.start_time
 
-        self.end_time: datetime = root_section.end_time
+        self.end_time: datetime = root_section.data.end_time
         self.total_duration: float = (
             self.end_time - self.start_time
         ).total_seconds() * 1e6  # microseconds
 
     @classmethod
-    def from_config(cls, root_section: "LogSection", config_path: str):
+    def from_config(
+        cls, root_section: TreeNode[LogEntry], config_path: str
+    ) -> TimelineVisualizer:
         """Factory method to create a TimelineVisualizer from a JSON config file.
 
         Note that the config file's syntax is just json with the key being the TimelineVisualizer attribute and the value the value you want to use.
@@ -148,16 +152,18 @@ class TimelineVisualizer:
 
     def draw_section_rect(
         self,
-        section: LogSection,
+        section: TreeNode[LogEntry],
         depth: int,
         section_index: int,
         bottom_y_section: float,
         root_section_width: float,
         height_is_depth_based: float = True,
     ) -> tuple[float, float, float]:
+        assert isinstance(section.data, LogSection)
+
         # NOTE: this ocmpotation is redundant and equals root_section_width, get rid of this soon
-        x_start = self.time_to_x(section.start_time)
-        x_end = self.time_to_x(section.end_time)
+        x_start = self.time_to_x(section.data.start_time)
+        x_end = self.time_to_x(section.data.end_time)
         # NOTE: at the base level width = 2
         width = x_end - x_start
 
@@ -167,7 +173,7 @@ class TimelineVisualizer:
         else:
             height = self.get_section_rect_height_aspect_ratio_based(width)
 
-        if section.name == "root":
+        if section.data.name == "root":
             if self.use_custom_root_section_height:
                 height = self.custom_root_section_height
 
@@ -205,13 +211,11 @@ class TimelineVisualizer:
             return f"{duration_us:.0f}µs"  # fallback
 
         # Section text label with duration
-        duration = section.duration_microseconds()
+        duration = section.data.duration_microseconds()
         duration_text = (
             f" ({format_duration_us(duration)})" if duration is not None else ""
         )
-        label_text = (
-            section.name if hasattr(section, "name") else f"Section {section_index}"
-        ) + duration_text
+        label_text = (section.data.name) + duration_text
 
         self.commands.append(
             f'get_text_geometry("{label_text}", Rectangle(({rect_center_x:.6f}, {rect_center_y:.6f}, 0.01), '
@@ -220,29 +224,40 @@ class TimelineVisualizer:
 
         return width, height, rect_center_y
 
-    def group_event_sequences(self, section: "LogSection"):
-        children_sorted = sorted(
-            section.children,
-            key=lambda c: c.timestamp if isinstance(c, LogMessage) else c.start_time,
-        )
-        event_sequences: List[List["LogMessage"]] = []
-        current_seq: List["LogMessage"] = []
+    def group_log_message_sequences(
+        self, section: TreeNode[LogEntry]
+    ) -> List[List[LogMessage]]:
 
-        for child in children_sorted:
-            if isinstance(child, LogMessage):
-                current_seq.append(child)
+        children_sorted_by_earliest_start_time: List[TreeNode[LogEntry]] = sorted(
+            section.children,
+            key=lambda c: (
+                c.data.timestamp
+                if isinstance(c.data, LogMessage)
+                else c.data.start_time
+            ),
+        )
+
+        # consecutive means that there is not a LogSection between them
+        consecutive_log_message: List[List[LogMessage]] = []
+        current_seq: List[LogMessage] = []
+
+        for child in children_sorted_by_earliest_start_time:
+            if isinstance(child.data, LogMessage):
+                current_seq.append(child.data)
             else:
-                if current_seq:
-                    event_sequences.append(current_seq)
+                if current_seq != []:
+                    consecutive_log_message.append(current_seq)
                     current_seq = []
-        if current_seq:
-            event_sequences.append(current_seq)
-        return event_sequences
+
+        if current_seq != []:
+            consecutive_log_message.append(current_seq)
+
+        return consecutive_log_message
 
     def draw_event_sequence_annotations(
         self,
-        event_sequence: List[LogMessage],
-        parent_section: LogSection,
+        consecutive_log_message_sequence: List[LogMessage],
+        parent_section: TreeNode[LogEntry],
         depth: int,
         parent_section_rect_center_y: float,
         parent_section_rect_width: float,
@@ -250,37 +265,47 @@ class TimelineVisualizer:
         root_section_width: float,
         height_is_depth_based: float = True,
     ):
-        first_event, last_event = event_sequence[0], event_sequence[-1]
+        assert isinstance(parent_section.data, LogSection)
+        # TODO: what if there is on
+        first_log_message: LogMessage = consecutive_log_message_sequence[0]
+        last_log_message: LogMessage = consecutive_log_message_sequence[-1]
 
         # Bounds limited by surrounding subsections
-        sections_ending_before_first_event = [
-            s
+        sections_ending_before_first_event: List[LogSection] = [
+            s.data
             for s in parent_section.children
-            if isinstance(s, LogSection) and s.end_time <= first_event.timestamp
+            if isinstance(s.data, LogSection)
+            and s.data.end_time <= first_log_message.timestamp
         ]
-        left_bound_time = max(
+
+        latest_end_time_of_log_sections_ending_before_first_event: datetime = max(
             [s.end_time for s in sections_ending_before_first_event],
-            default=parent_section.start_time,
+            default=parent_section.data.start_time,
         )
 
-        sections_starting_after_last_event = [
-            s
+        sections_starting_after_last_event: List[LogSection] = [
+            s.data
             for s in parent_section.children
-            if isinstance(s, LogSection) and s.start_time >= last_event.timestamp
+            if isinstance(s.data, LogSection)
+            and s.data.start_time >= last_log_message.timestamp
         ]
-        right_bound_time = min(
+        earliest_start_time_of_log_sections_starting_before_first_event: datetime = min(
             [s.start_time for s in sections_starting_after_last_event],
-            default=parent_section.end_time,
+            default=parent_section.data.end_time,
         )
 
         # Rectangle for sequence
-        availble_area_x_start = self.time_to_x(left_bound_time)
-        available_area_x_end = self.time_to_x(right_bound_time)
-        available_width = available_area_x_end - availble_area_x_start
+        availble_area_x_start: float = self.time_to_x(
+            latest_end_time_of_log_sections_ending_before_first_event
+        )
+        available_area_x_end: float = self.time_to_x(
+            earliest_start_time_of_log_sections_starting_before_first_event
+        )
+        available_width: float = available_area_x_end - availble_area_x_start
 
         # NOTE: This needs to be updated
 
-        num_events_in_sequence = len(event_sequence)
+        num_events_in_sequence = len(consecutive_log_message_sequence)
 
         # we're doing margin like THINGY|MARGIN, THINGY|MARGIN
         margin = 0.01 * available_width
@@ -318,7 +343,7 @@ class TimelineVisualizer:
             )
             annotation_rect_height = annotation_rect_width / 4
 
-        for i, event in enumerate(event_sequence):
+        for i, event in enumerate(consecutive_log_message_sequence):
             start_x = availble_area_x_start + i * (annotation_rect_width + margin)
             annotation_rect_center_x = start_x + annotation_rect_width / 2
 
@@ -373,24 +398,27 @@ class TimelineVisualizer:
 
     def process_section(
         self,
-        section: LogSection,
+        section: TreeNode[LogEntry],
         depth: int,
         bottom_y_current_section: float,
         section_index_for_labelling: int = 0,
         root_section_width: float = -1,
-        height_is_depth_based: float = False,
+        height_is_depth_based: bool = False,
     ):
         # NOTE: in this function we are constructing the next section on top of a previous section, bottom_y_current section is the base that we build up from
         # we are drawing a section, so we draw a rect, its events on top with its annotations and recurse on any other sections
 
+        assert isinstance(section.data, LogSection)
+
         # why do we do this?
-        if section.end_time is None:
+        # TODO: this can be removed now.
+        if section.data.end_time is None:
             return bottom_y_current_section
 
-        iterating_on_root = root_section_width == -1
+        iterating_on_root: bool = root_section_width == -1
         if iterating_on_root:
-            x_start = self.time_to_x(section.start_time)
-            x_end = self.time_to_x(section.end_time)
+            x_start = self.time_to_x(section.data.start_time)
+            x_end = self.time_to_x(section.data.end_time)
             # NOTE: at the base level width = 2 * scale
             root_section_width = x_end - x_start
 
@@ -406,7 +434,7 @@ class TimelineVisualizer:
         )
 
         # Event annotations
-        for seq in self.group_event_sequences(section):
+        for seq in self.group_log_message_sequences(section):
             self.draw_event_sequence_annotations(
                 seq,
                 section,
@@ -425,7 +453,7 @@ class TimelineVisualizer:
         child_section_index = 0
 
         for child in section.children:
-            if isinstance(child, LogSection):
+            if isinstance(child.data, LogSection):
                 self.process_section(
                     child,
                     depth + 1,
@@ -435,19 +463,19 @@ class TimelineVisualizer:
                     height_is_depth_based,
                 )
                 child_section_index += 1
-            elif isinstance(child, LogMessage):
+            elif isinstance(child.data, LogMessage):
                 # NOTE: regular event drawing here.
-                event_center_x = self.time_to_x(child.timestamp)
+                event_center_x = self.time_to_x(child.data.timestamp)
                 event_color = (1.0, 0.8, 0.4)
 
                 event_height: float
                 event_width: float
                 # NOTE: we make sure this matches the annotations this syncro is kinda sketch rn
                 if height_is_depth_based:
-                    event_height = self.get_section_rect_height_depth_based(
+                    event_height: float = self.get_section_rect_height_depth_based(
                         root_section_width, depth + 1
                     )
-                    event_width = self.get_event_width_depth_based(
+                    event_width: float = self.get_event_width_depth_based(
                         root_section_width, depth + 1
                     )
                 else:
