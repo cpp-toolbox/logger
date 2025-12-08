@@ -143,6 +143,11 @@ class Logger {
         logger_->set_level(current_level_);
     }
 
+    void enable_all_levels() {
+        current_level_ = spdlog::level::trace;
+        logger_->set_level(current_level_);
+    }
+
   private:
     void format_and_log(spdlog::level::level_enum lvl, std::string msg) {
         // Compute the maximum length of all level names
