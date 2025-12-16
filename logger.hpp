@@ -230,6 +230,14 @@ class Logger {
  */
 class LogSection {
   public:
+    enum class LogMode {
+        inherit, ///< inherit the logging behavior from the parent section
+        enable,  ///< enable logging even if parent is muted
+        disable  ///< disable logging for this section
+    };
+
+    LogMode mode;
+
     /**
      * @brief Constructs a new log section.
      *
@@ -243,14 +251,22 @@ class LogSection {
      *
      * @note we can't use variadic args because we want a default argument for disable logging at the end.
      */
-    LogSection(Logger &logger, const std::string &section_name, bool logging_enabled = true)
-        : logger_(logger), section_name_(section_name), disable_logging_(not logging_enabled),
-          previous_level_(logger.get_current_level()) {
+    LogSection(Logger &logger, const std::string &section_name, LogMode mode = LogMode::inherit)
+        : logger_(logger), section_name_(section_name), mode(mode), previous_level_(logger.get_current_level()) {
 
-        if (disable_logging_) {
+        switch (mode) {
+        case LogMode::disable:
+            // by disabling all levels it makes it so that nested logging is disabled.
             logger_.disable_all_levels();
-        } else {
+            break;
+        case LogMode::enable:
+            logger_.enable_all_levels();
             logger_.start_section("{}", section_name_);
+            break;
+        case LogMode::inherit:
+            // when logging is enabled this does something, otherwise it does not
+            logger_.start_section("{}", section_name_);
+            break;
         }
     }
 
@@ -261,10 +277,18 @@ class LogSection {
      * is restored before ending the section.
      */
     ~LogSection() {
-        if (disable_logging_) {
+
+        switch (mode) {
+        case LogMode::disable:
             logger_.set_level(previous_level_);
-        } else {
+            break;
+        case LogMode::enable:
             logger_.end_section("{}", section_name_);
+            logger_.set_level(previous_level_);
+            break;
+        case LogMode::inherit:
+            logger_.end_section("{}", section_name_);
+            break;
         }
     }
 
@@ -277,7 +301,6 @@ class LogSection {
   private:
     Logger &logger_;                           ///< Reference to the logger that handles this section.
     std::string section_name_;                 ///< The section name used in log output.
-    bool disable_logging_;                     ///< Whether logging was temporarily disabled for this section.
     spdlog::level::level_enum previous_level_; ///< The log level to restore after destruction.
 };
 
@@ -295,8 +318,8 @@ class GlobalLogSection {
      * @param logging_enabled Whether logging is enabled for this section.
      */
 
-    GlobalLogSection(const std::string &section_name, bool logging_enabled = true)
-        : inner_section(*global_logger, section_name, logging_enabled) {}
+    GlobalLogSection(const std::string &section_name, LogSection::LogMode mode = LogSection::LogMode::inherit)
+        : inner_section(*global_logger, section_name, mode) {}
 
   private:
     LogSection inner_section;
